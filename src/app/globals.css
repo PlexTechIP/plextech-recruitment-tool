@@ -1,26 +1,230 @@
 @import "tailwindcss";
 
+/* ── PlexTech brand ── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --plex-from: #E8175D;
+  --plex-to:   #FF6B35;
+}
+
+/* ── Dark theme (default) ── */
+:root {
+  --bg-base:        #0a0a0f;
+  --bg-surface:     #0f0f1a;
+  --bg-raised:      #1a1a2e;
+  --bg-active:      #252545;
+  --border:         #1e2035;
+  --text-primary:   #ededed;
+  --text-secondary: #d1d5db;
+  --text-muted:     #6b7280;
+}
+
+/* ── Light theme — attribute selector wins over :root ── */
+html[data-theme="light"] {
+  --bg-base:        #f7f6ff;
+  --bg-surface:     #ffffff;
+  --bg-raised:      #eeedf8;
+  --bg-active:      #e2e0f0;
+  --border:         #d8d5ee;
+  --text-primary:   #18101e;
+  --text-secondary: #374151;
+  --text-muted:     #6b7280;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.plex-gradient {
+  background: linear-gradient(135deg, var(--plex-from), var(--plex-to));
 }
+.plex-gradient:hover { opacity: 0.88; }
+
+.plex-gradient-text {
+  background: linear-gradient(135deg, var(--plex-from), var(--plex-to));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Applicant portal pages ─────────────────────────────── */
+
+.apply-page {
+  flex: 1;
+  font-family: "DM Sans", sans-serif;
+  background-image: url("/shapes-background.png");
+  background-size: cover;
+  background-repeat: no-repeat;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: grey;
+}
+
+.apply-home-card {
+  background-color: white;
+  border-radius: 40px;
+  padding: 30px;
+  border: 1px solid #b7b7b7;
+  width: 100%;
+  max-width: 600px;
+}
+
+.apply-form-card {
+  position: relative;
+  background-color: white;
+  border-radius: 40px;
+  padding: 40px;
+  box-shadow: 0 0 2px 1px rgba(0,0,0,0.2);
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.apply-form-title {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.apply-page h1, .apply-page h2, .apply-page h3,
+.apply-page h4, .apply-page h5, .apply-page h6 {
+  color: black;
+  font-family: "DM Sans", sans-serif;
+}
+.apply-page h4 { color: grey; font-weight: 400; }
+.apply-page h6 { color: grey; font-weight: 400; }
+
+.apply-field {
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.apply-field label {
+  font-weight: bold;
+  color: black;
+  margin-bottom: 0.5rem;
+  font-family: "DM Sans", sans-serif;
+}
+
+.apply-field input[type="text"],
+.apply-field input[type="email"],
+.apply-field select,
+.apply-field textarea {
+  padding: 0.65rem 0.5rem;
+  font-size: 1rem;
+  font-family: "DM Sans", sans-serif;
+  border: 1px solid #b7b7b7;
+  border-radius: 5px;
+  background-color: transparent;
+  color: black;
+  width: 100%;
+  max-width: 400px;
+  caret-color: #ff8a00;
+}
+
+.apply-field textarea {
+  max-width: 100%;
+  height: 8rem;
+  resize: vertical;
+}
+
+.apply-warning {
+  color: red;
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+.apply-btn-primary {
+  background-color: white;
+  color: #ff8a00;
+  border: 2px solid #ff8a00;
+  border-radius: 10px;
+  padding: 0.5rem 1.25rem;
+  font-size: 1rem;
+  font-family: "DM Sans", sans-serif;
+  font-weight: bold;
+  cursor: pointer;
+  margin-bottom: 1rem;
+  transition: background-color 0.2s, color 0.2s;
+}
+.apply-btn-primary:hover { background-color: #ff8a00; color: white; }
+.apply-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.apply-btn-secondary {
+  background-color: white;
+  color: grey;
+  border: 2px solid #d9d9d9;
+  border-radius: 10px;
+  padding: 0.5rem 1.25rem;
+  font-size: 1rem;
+  font-family: "DM Sans", sans-serif;
+  font-weight: bold;
+  cursor: pointer;
+  margin-bottom: 1rem;
+  margin-left: 0.5rem;
+  transition: background-color 0.2s;
+}
+.apply-btn-secondary:hover { background-color: #f0f0f0; }
+
+/* Multi-select race dropdown */
+.apply-multiselect {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #b7b7b7;
+  border-radius: 5px;
+  background: white;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 400px;
+  color: black;
+}
+
+.apply-chip {
+  background-color: #ffe8d0;
+  color: #ff8a00;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.apply-dropdown {
+  position: absolute;
+  z-index: 10;
+  background: white;
+  border: 1px solid #b7b7b7;
+  border-radius: 5px;
+  max-width: 400px;
+  width: 100%;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.apply-dropdown-item {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: black;
+}
+.apply-dropdown-item:hover { background-color: #fff3e8; }
+.apply-dropdown-item.selected { background-color: #ffe8d0; color: #ff8a00; font-weight: 500; }
+
+/* ── Slim scrollbars ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
