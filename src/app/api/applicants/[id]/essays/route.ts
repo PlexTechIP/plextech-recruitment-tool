@@ -1,0 +1,30 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { connectDB } from '@/lib/mongodb'
+import { Applicant, EssayResponse, EssayPrompt } from '@/lib/models'
+
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  await connectDB()
+  const { id } = await params
+
+  const [applicantDoc, responses] = await Promise.all([
+    Applicant.findById(id, { resume_base64: 0 }).lean(),
+    EssayResponse.find({ applicant_id: id }).lean(),
+  ])
+
+  if (!applicantDoc) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  const applicant = { ...applicantDoc, id: applicantDoc._id.toString(), cycle_id: applicantDoc.cycle_id.toString(), _id: undefined }
+
+  const promptIds = responses.map(r => r.prompt_id)
+  const prompts = await EssayPrompt.find({ _id: { $in: promptIds } }).sort({ question_number: 1 }).lean()
+
+  const essays = prompts.map(p => {
+    const r = responses.find(r => r.prompt_id.toString() === p._id.toString())
+    return {
+      prompt: { id: p._id.toString(), cycle_id: p.cycle_id.toString(), question_number: p.question_number, prompt: p.prompt, description: p.description },
+      response: r?.response ?? '',
+    }
+  })
+
+  return NextResponse.json({ applicant, essays })
+}

@@ -1,37 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { signIn, useSession } from 'next-auth/react'
 import ThemeToggle from '@/components/ThemeToggle'
 
 export default function Home() {
   const router = useRouter()
-  const [loading, setLoading] = useState(true)
-  const [signingIn, setSigningIn] = useState(false)
-  const [error, setError] = useState('')
+  const { data: session, status } = useSession()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/dashboard')
-      else setLoading(false)
-    })
-  }, [router])
+    if (session) router.replace('/dashboard')
+  }, [session, router])
 
-  async function handleGoogleSignIn() {
-    setSigningIn(true)
-    setError('')
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    })
-    if (error) {
-      setError(error.message)
-      setSigningIn(false)
-    }
-  }
-
-  if (loading) {
+  if (status === 'loading') {
     return (
       <main className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
         <div className="text-[var(--text-muted)] text-sm">Loading...</div>
@@ -56,15 +38,12 @@ export default function Home() {
             Sign in with your club Google account to continue.
           </p>
 
-          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
-
           <button
-            onClick={handleGoogleSignIn}
-            disabled={signingIn}
-            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 disabled:opacity-60 text-gray-900 font-medium py-2.5 rounded-lg transition-colors border border-gray-200"
+            onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
+            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-gray-100 text-gray-900 font-medium py-2.5 rounded-lg transition-colors border border-gray-200"
           >
             <GoogleIcon />
-            {signingIn ? 'Redirecting...' : 'Sign in with Google'}
+            Sign in with Google
           </button>
         </div>
 

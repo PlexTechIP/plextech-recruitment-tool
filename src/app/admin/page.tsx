@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
 import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
 import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus, GradingType } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
@@ -80,8 +79,8 @@ export default function AdminPage() {
 
   // ── cycles ───────────────────────────────────────────────
   const loadCycles = useCallback(async () => {
-    const { data } = await supabase.from('recruitment_cycles').select('*').order('created_at', { ascending: false })
-    setCycles((data as RecruitmentCycle[]) ?? [])
+    const data: RecruitmentCycle[] = await fetch('/api/cycles').then(r => r.json())
+    setCycles(data ?? [])
   }, [])
 
   useEffect(() => { if (!loading) loadCycles() }, [loading, loadCycles])
@@ -91,38 +90,54 @@ export default function AdminPage() {
     const name = newCycleName.trim()
     if (!name) { setCycleError('Enter a cycle name.'); return }
     setCycleLoading(true)
-    const { data, error } = await supabase.from('recruitment_cycles')
-      .insert({ name, status: 'active', accepting_applications: false })
-      .select().single()
-    if (error) { setCycleError(error.message); setCycleLoading(false); return }
+    const res = await fetch('/api/cycles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, status: 'active', accepting_applications: false }),
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      setCycleError(err.error ?? 'Failed to create cycle.')
+      setCycleLoading(false)
+      return
+    }
+    const data: RecruitmentCycle = await res.json()
     setNewCycleName('')
     await loadCycles()
-    setSelectedCycle(data as RecruitmentCycle)
+    setSelectedCycle(data)
     setCycleLoading(false)
   }
 
   async function toggleAccepting(cycle: RecruitmentCycle) {
     const updated = { ...cycle, accepting_applications: !cycle.accepting_applications }
-    await supabase.from('recruitment_cycles').update({ accepting_applications: updated.accepting_applications }).eq('id', cycle.id)
+    await fetch(`/api/cycles/${cycle.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accepting_applications: updated.accepting_applications }),
+    })
     setCycles(prev => prev.map(c => c.id === cycle.id ? updated : c))
     if (selectedCycle?.id === cycle.id) setSelectedCycle(updated)
   }
 
   async function endCycle(cycle: RecruitmentCycle) {
     if (!confirm(`End cycle "${cycle.name}"? This closes applications and marks the cycle as ended.`)) return
-    await supabase.from('recruitment_cycles').update({ status: 'ended', accepting_applications: false }).eq('id', cycle.id)
+    await fetch(`/api/cycles/${cycle.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ended', accepting_applications: false }),
+    })
     await loadCycles()
     if (selectedCycle?.id === cycle.id) setSelectedCycle(null)
   }
 
   // ── prompts ──────────────────────────────────────────────
   const loadPrompts = useCallback(async (cycleId: string) => {
-    const { data } = await supabase.from('essay_prompts').select('*').eq('cycle_id', cycleId).order('question_number')
-    if (data && data.length > 0) {
-      setPrompts(data as EssayPrompt[])
-    } else {
-      setPrompts([1, 2, 3].map(n => ({ id: '', cycle_id: cycleId, question_number: n, prompt: '', description: null })))
-    }
+    const existing: EssayPrompt[] = await fetch(`/api/cycles/${cycleId}/prompts`).then(r => r.json())
+    const filled = [1, 2, 3].map(n => {
+      const found = existing.find(p => p.question_number === n)
+      return found ?? { id: '', cycle_id: cycleId, question_number: n, prompt: '', description: null }
+    })
+    setPrompts(filled)
   }, [])
 
   useEffect(() => {
@@ -133,6 +148,7 @@ export default function AdminPage() {
       setSelectedRound(null)
       setDelibMessage('')
       setAssignMessage('')
+      setPromptMessage('')
     }
   }, [selectedCycle, loadPrompts])
 
@@ -140,13 +156,17 @@ export default function AdminPage() {
     if (!selectedCycle) return
     setPromptSaving(true)
     setPromptMessage('')
-    for (const p of prompts) {
-      if (p.id) {
-        await supabase.from('essay_prompts').update({ prompt: p.prompt, description: p.description }).eq('id', p.id)
-      } else {
-        await supabase.from('essay_prompts').insert({ cycle_id: selectedCycle.id, question_number: p.question_number, prompt: p.prompt, description: p.description })
-      }
-    }
+    await fetch(`/api/cycles/${selectedCycle.id}/prompts`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prompts.map(p => ({
+        ...(p.id ? { id: p.id } : {}),
+        cycle_id: selectedCycle.id,
+        question_number: p.question_number,
+        prompt: p.prompt,
+        description: p.description,
+      }))),
+    })
     await loadPrompts(selectedCycle.id)
     setPromptMessage('Saved.')
     setPromptSaving(false)
@@ -154,8 +174,8 @@ export default function AdminPage() {
 
   // ── rounds ───────────────────────────────────────────────
   async function loadRounds(cycleId: string) {
-    const { data } = await supabase.from('rounds').select('*').eq('cycle_id', cycleId).order('order_index')
-    setRounds((data as Round[]) ?? [])
+    const data: Round[] = await fetch(`/api/cycles/${cycleId}/rounds`).then(r => r.json())
+    setRounds(data ?? [])
   }
 
   async function createRound() {
@@ -164,25 +184,45 @@ export default function AdminPage() {
     const name = newRoundName.trim()
     if (!name) { setRoundError('Enter a round name.'); return }
     const orderIndex = rounds.length + 1
-    const { data, error } = await supabase.from('rounds').insert({
-      cycle_id: selectedCycle.id,
-      name,
-      order_index: orderIndex,
-      grading_type: newRoundType || null,
-      status: 'pending',
-    }).select().single()
-    if (error) { setRoundError(error.message); return }
+    const res = await fetch('/api/rounds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cycle_id: selectedCycle.id,
+        name,
+        order_index: orderIndex,
+        grading_type: newRoundType || null,
+        status: 'pending',
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      setRoundError(err.error ?? 'Failed to create round.')
+      return
+    }
+    const data: Round = await res.json()
     setNewRoundName('')
     setNewRoundType('rubric')
     await loadRounds(selectedCycle.id)
-    setSelectedRound(data as Round)
+    setSelectedRound(data)
   }
 
   async function updateRoundStatus(round: Round, status: RoundStatus) {
-    await supabase.from('rounds').update({ status }).eq('id', round.id)
+    await fetch(`/api/rounds/${round.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
     const updated = { ...round, status }
     setRounds(prev => prev.map(r => r.id === round.id ? updated : r))
     setSelectedRound(updated)
+  }
+
+  async function deleteRound(round: Round) {
+    if (!confirm(`Delete round "${round.name}"? This will also delete all grader assignments and reviews for this round.`)) return
+    await fetch(`/api/rounds/${round.id}`, { method: 'DELETE' })
+    if (selectedRound?.id === round.id) setSelectedRound(null)
+    await loadRounds(selectedCycle!.id)
   }
 
   // ── grader assignment (round-robin) ──────────────────────
@@ -191,15 +231,14 @@ export default function AdminPage() {
     setAssignLoading(true)
     setAssignMessage('')
 
-    const [{ data: gradersData }, { data: leadersData }, { data: appsData }] = await Promise.all([
-      supabase.from('authorized_users').select('email').eq('role', 'grader'),
-      supabase.from('authorized_users').select('email').eq('role', 'leadership'),
-      supabase.from('applicants').select('id').eq('cycle_id', selectedCycle.id),
+    const [allUsers, appsData] = await Promise.all([
+      fetch('/api/authorized-users').then(r => r.json()) as Promise<{ email: string; role: string }[]>,
+      fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json()) as Promise<{ id: string }[]>,
     ])
 
-    const members = (gradersData ?? []).map((g: { email: string }) => g.email)
-    const leadership = (leadersData ?? []).map((l: { email: string }) => l.email)
-    const applicants = (appsData ?? []).map((a: { id: string }) => a.id)
+    const members = allUsers.filter(u => u.role === 'grader').map(u => u.email)
+    const leadership = allUsers.filter(u => u.role === 'leadership').map(u => u.email)
+    const applicants = (appsData ?? []).map(a => a.id)
 
     if (applicants.length === 0) { setAssignMessage('No applicants found for this cycle.'); setAssignLoading(false); return }
     if (members.length + leadership.length === 0) { setAssignMessage('No graders found.'); setAssignLoading(false); return }
@@ -224,7 +263,11 @@ export default function AdminPage() {
       }
     }
 
-    await supabase.from('grader_assignments').upsert(rows, { onConflict: 'round_id,applicant_id,grader_email' })
+    await fetch('/api/grader-assignments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rows),
+    })
     await updateRoundStatus(selectedRound, 'grading')
     setAssignMessage(`Assigned ${applicants.length} applicants across ${members.length + leadership.length} graders.`)
     setAssignLoading(false)
@@ -232,7 +275,7 @@ export default function AdminPage() {
 
   // ── analytics ────────────────────────────────────────────
   async function loadAnalytics(cycleId: string) {
-    const { data } = await supabase.from('applicants').select('year, gender, race').eq('cycle_id', cycleId)
+    const data: Applicant[] = await fetch(`/api/cycles/${cycleId}/applicants`).then(r => r.json())
     if (!data) return
     const counts: Record<string, number> = { total: data.length, freshman: 0, sophomore: 0, junior: 0, senior: 0, male: 0, female: 0, other: 0 }
     const yearMap: Record<string, string> = { [String(new Date().getFullYear())]: 'senior', [String(new Date().getFullYear()+1)]: 'junior', [String(new Date().getFullYear()+2)]: 'sophomore', [String(new Date().getFullYear()+3)]: 'freshman' }
@@ -254,9 +297,9 @@ export default function AdminPage() {
     setDelibMessage('')
 
     try {
-      const [{ data: reviewsData }, { data: appsData }] = await Promise.all([
-        supabase.from('reviews').select('*').eq('round_id', selectedRound.id),
-        supabase.from('applicants').select('*').eq('cycle_id', selectedCycle.id),
+      const [reviewsData, appsData] = await Promise.all([
+        fetch(`/api/reviews?round_id=${selectedRound.id}`).then(r => r.json()),
+        fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json()),
       ])
 
       if (!reviewsData?.length) throw new Error('No reviews found for this round. Ensure grading is complete.')
@@ -267,20 +310,28 @@ export default function AdminPage() {
       const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
       const sessionName = `${selectedCycle.name} — ${selectedRound.name}`
 
-      const { error: sessionError } = await supabase.from('sessions').insert({
-        id: sessionId,
-        round_id: selectedRound.id,
-        name: sessionName,
-        status: 'active',
-        created_by: currentUser.email,
-        anonymous: false,
+      const sessionRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: sessionId,
+          round_id: selectedRound.id,
+          name: sessionName,
+          status: 'active',
+          created_by: currentUser.email,
+          anonymous: false,
+        }),
       })
-      if (sessionError) throw sessionError
+      if (!sessionRes.ok) {
+        const err = await sessionRes.json()
+        throw new Error(err.error ?? 'Failed to create session.')
+      }
 
-      await supabase.from('session_members').upsert(
-        { session_id: sessionId, user_email: currentUser.email, joined_at: new Date().toISOString() },
-        { onConflict: 'session_id,user_email' }
-      )
+      await fetch('/api/session-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
+      })
 
       const candidates = evaluated.map((ev, idx) => ({
         session_id: sessionId,
@@ -296,7 +347,12 @@ export default function AdminPage() {
         },
       }))
 
-      await supabase.from('candidates').insert(candidates)
+      await fetch(`/api/sessions/${sessionId}/candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(candidates),
+      })
+
       await updateRoundStatus(selectedRound, 'deliberating')
 
       setDelibMessage(`Session created! ID: ${sessionId}`)
@@ -477,23 +533,31 @@ export default function AdminPage() {
             <Section title="Rounds">
               <div className="space-y-2">
                 {rounds.map(round => (
-                  <button
-                    key={round.id}
-                    onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage('') }}
-                    className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
-                      selectedRound?.id === round.id
-                        ? 'bg-[var(--bg-active)] border-[#FF6B35]/40'
-                        : 'bg-[var(--bg-raised)] border-[var(--border)] hover:bg-[var(--bg-active)]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-sm text-[var(--text-primary)]">{round.name}</p>
-                        <p className="text-xs text-[var(--text-muted)] mt-0.5">{round.grading_type ?? 'delib only'}</p>
+                  <div key={round.id} className={`flex items-center gap-1 rounded-lg border transition-colors ${
+                    selectedRound?.id === round.id
+                      ? 'bg-[var(--bg-active)] border-[#FF6B35]/40'
+                      : 'bg-[var(--bg-raised)] border-[var(--border)]'
+                  }`}>
+                    <button
+                      onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage('') }}
+                      className="flex-1 text-left px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-sm text-[var(--text-primary)]">{round.name}</p>
+                          <p className="text-xs text-[var(--text-muted)] mt-0.5">{round.grading_type ?? 'delib only'}</p>
+                        </div>
+                        <Badge label={round.status} color={STATUS_COLOR[round.status]} />
                       </div>
-                      <Badge label={round.status} color={STATUS_COLOR[round.status]} />
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={() => deleteRound(round)}
+                      className="px-2 py-3 text-[var(--text-muted)] hover:text-red-400 transition-colors text-sm"
+                      title="Delete round"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ))}
 
                 {rounds.length === 0 && (
@@ -560,7 +624,7 @@ export default function AdminPage() {
                     </p>
                     <button
                       onClick={assignGraders}
-                      disabled={assignLoading}
+                      disabled={assignLoading || selectedRound.status !== 'pending'}
                       className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg"
                     >
                       {assignLoading ? 'Assigning...' : 'Assign Graders'}

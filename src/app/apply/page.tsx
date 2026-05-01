@@ -2,23 +2,21 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
-import { RecruitmentCycle } from '@/lib/types'
 import Image from 'next/image'
+
+interface Cycle { id: string; name: string; status: string; accepting_applications: boolean }
 
 export default function ApplyHome() {
   const router = useRouter()
-  const [cycle, setCycle] = useState<RecruitmentCycle | null>(null)
+  const [cycle, setCycle] = useState<Cycle | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase
-      .from('recruitment_cycles')
-      .select('*')
-      .eq('status', 'active')
-      .maybeSingle()
-      .then(({ data }) => {
-        setCycle(data as RecruitmentCycle | null)
+    fetch('/api/cycles')
+      .then(r => r.json())
+      .then((cycles: Cycle[]) => {
+        const active = cycles.find(c => (c as { status: string }).status === 'active') ?? null
+        setCycle(active)
         setLoading(false)
       })
   }, [])

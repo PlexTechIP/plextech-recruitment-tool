@@ -2,8 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
-import { RecruitmentCycle, EssayPrompt } from '@/lib/types'
 import Image from 'next/image'
 
 const RACE_OPTIONS = [
@@ -17,14 +15,25 @@ const RACE_OPTIONS = [
   'Prefer not to answer',
 ]
 
+interface EssayPrompt { id: string; question_number: number; prompt: string; description: string | null }
+interface Cycle { id: string; name: string; accepting_applications: boolean; status: string }
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1]) // strip data URI prefix
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
 export default function ApplicationForm() {
   const router = useRouter()
-  const [cycle, setCycle] = useState<RecruitmentCycle | null>(null)
+  const [cycle, setCycle] = useState<Cycle | null>(null)
   const [prompts, setPrompts] = useState<EssayPrompt[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
-  // Form fields
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
@@ -42,39 +51,25 @@ export default function ApplicationForm() {
   const [commitments, setCommitments] = useState('')
   const [raceDropdownOpen, setRaceDropdownOpen] = useState(false)
   const raceRef = useRef<HTMLDivElement>(null)
-
-  // Field errors
   const [errors, setErrors] = useState<Record<string, string>>({})
-
-  const appId = useRef(Date.now().toString())
 
   const currentYear = new Date().getFullYear()
 
   useEffect(() => {
     async function load() {
-      const { data: cycleData } = await supabase
-        .from('recruitment_cycles')
-        .select('*')
-        .eq('status', 'active')
-        .maybeSingle()
+      const res = await fetch('/api/cycles')
+      const cycles: Cycle[] = await res.json()
+      const active = cycles.find(c => c.status === 'active' && c.accepting_applications) ?? null
+      if (!active) { router.replace('/apply'); return }
+      setCycle(active)
 
-      if (!cycleData || !cycleData.accepting_applications) {
-        router.replace('/apply')
-        return
-      }
-      setCycle(cycleData as RecruitmentCycle)
-
-      const { data: promptData } = await supabase
-        .from('essay_prompts')
-        .select('*')
-        .eq('cycle_id', cycleData.id)
-        .order('question_number')
-      setPrompts((promptData as EssayPrompt[]) ?? [])
+      const pRes = await fetch(`/api/cycles/${active.id}/prompts`)
+      const promptData: EssayPrompt[] = await pRes.json()
+      setPrompts(promptData)
     }
     load()
   }, [router])
 
-  // Close race dropdown on outside click
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (raceRef.current && !raceRef.current.contains(e.target as Node)) {
@@ -86,9 +81,7 @@ export default function ApplicationForm() {
   }, [])
 
   function toggleRace(option: string) {
-    setRace(prev =>
-      prev.includes(option) ? prev.filter(r => r !== option) : [...prev, option]
-    )
+    setRace(prev => prev.includes(option) ? prev.filter(r => r !== option) : [...prev, option])
   }
 
   function validate(): boolean {
@@ -115,29 +108,25 @@ export default function ApplicationForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitError('')
-    if (!validate()) {
-      setSubmitError('Please fill out the required fields above.')
-      return
-    }
+    if (!validate()) { setSubmitError('Please fill out the required fields above.'); return }
     if (!cycle) return
 
     setSubmitting(true)
-
     try {
-      // Upload resume to Supabase Storage
-      const resumePath = `${cycle.id}/${appId.current}.pdf`
-      const { error: uploadError } = await supabase.storage
-        .from('resumes')
-        .upload(resumePath, resumeFile!, { contentType: 'application/pdf', upsert: false })
-      if (uploadError) throw new Error('Resume upload failed: ' + uploadError.message)
+      // Convert PDF to base64 (same as the original portal)
+      const resume_base64 = await fileToBase64(resumeFile!)
 
-      const { data: { publicUrl } } = supabase.storage.from('resumes').getPublicUrl(resumePath)
-
-      // Insert applicant
       const effectiveGender = gender === 'Other' ? genderOther || 'Other' : gender
-      const { data: applicant, error: appError } = await supabase
-        .from('applicants')
-        .insert({
+
+      const essays = prompts.map(p => ({
+        prompt_id: p.id,
+        response: (answers[`answer_${p.id}`] ?? '').trim(),
+      }))
+
+      const res = await fetch('/api/applicants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           cycle_id: cycle.id,
           first_name: firstName.trim(),
           last_name: lastName.trim(),
@@ -151,24 +140,18 @@ export default function ApplicationForm() {
           linkedin: linkedin.trim() || null,
           website: website.trim() || null,
           time_commitment: commitments.trim(),
-          resume_url: publicUrl,
-        })
-        .select('id')
-        .single()
-      if (appError) throw new Error('Application submission failed: ' + appError.message)
+          resume_base64,
+          essays,
+        }),
+      })
 
-      // Insert essay responses
-      const responseRows = prompts.map(p => ({
-        applicant_id: applicant.id,
-        prompt_id: p.id,
-        response: (answers[`answer_${p.id}`] ?? '').trim(),
-      }))
-      if (responseRows.length > 0) {
-        const { error: essayError } = await supabase.from('essay_responses').insert(responseRows)
-        if (essayError) throw new Error('Essay submission failed: ' + essayError.message)
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? 'Submission failed.')
       }
 
-      router.push(`/apply/success?id=${applicant.id}&name=${encodeURIComponent(firstName)}`)
+      const { id } = await res.json()
+      router.push(`/apply/success?id=${id}&name=${encodeURIComponent(firstName)}`)
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : 'An unexpected error occurred. Please contact plextech@berkeley.edu.')
     } finally {
@@ -181,7 +164,6 @@ export default function ApplicationForm() {
   return (
     <div className="apply-page">
       <form className="apply-form-card" onSubmit={handleSubmit} noValidate>
-        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button type="button" className="apply-btn-primary" onClick={() => router.push('/apply')}>
             Return Home
@@ -195,7 +177,6 @@ export default function ApplicationForm() {
           <p>All applications submitted are final; duplicates will not be accepted.</p>
         </div>
 
-        {/* Personal Info */}
         <div className="apply-field">
           <label>First Name</label>
           <input type="text" value={firstName} onChange={e => setFirstName(e.target.value)} />
@@ -252,7 +233,6 @@ export default function ApplicationForm() {
           )}
         </div>
 
-        {/* Race / Ethnicity */}
         <div className="apply-field" ref={raceRef}>
           <label>Your Demographic Background</label>
           <p style={{ margin: '0.25rem 0 0.5rem', color: 'grey' }}>Please be ensured that this has absolutely no impact on your application.</p>
@@ -282,7 +262,6 @@ export default function ApplicationForm() {
           {errors.race && <p className="apply-warning">{errors.race}</p>}
         </div>
 
-        {/* Intended Role */}
         <div className="apply-field">
           <label>Intended Role</label>
           <select value={role} onChange={e => setRole(e.target.value)}>
@@ -293,7 +272,6 @@ export default function ApplicationForm() {
           {errors.role && <p className="apply-warning">{errors.role}</p>}
         </div>
 
-        {/* Resume */}
         <div className="apply-field">
           <label>Resume / CV</label>
           <p style={{ color: 'grey', margin: '0.25rem 0' }}>Please limit your resume to a one-page PDF document. Documents of other formats will not be reviewed.</p>
@@ -323,7 +301,6 @@ export default function ApplicationForm() {
           {errors.resume && <p className="apply-warning">{errors.resume}</p>}
         </div>
 
-        {/* Optional links */}
         <div className="apply-field">
           <label>LinkedIn Profile (optional)</label>
           <input type="text" value={linkedin} onChange={e => setLinkedin(e.target.value)} />
@@ -334,7 +311,6 @@ export default function ApplicationForm() {
           <input type="text" value={website} onChange={e => setWebsite(e.target.value)} />
         </div>
 
-        {/* Essay prompts */}
         {prompts.map(prompt => {
           const key = `answer_${prompt.id}`
           return (
@@ -352,7 +328,6 @@ export default function ApplicationForm() {
           )
         })}
 
-        {/* Commitments */}
         <div className="apply-field">
           <label>Please tell us about your commitments this semester.</label>
           <p style={{ color: 'grey', margin: '0.25rem 0' }}>
@@ -363,14 +338,6 @@ export default function ApplicationForm() {
           {errors.commitments && <p className="apply-warning">{errors.commitments}</p>}
         </div>
 
-        {/* Application ID */}
-        <div className="apply-field">
-          <label style={{ color: '#ff8a00' }}>Your Application ID</label>
-          <p style={{ color: 'grey', margin: '0.25rem 0' }}>Please save this ID and refer to it should you need to contact us regarding your application.</p>
-          <input type="text" readOnly value={appId.current} style={{ color: '#ff8a00' }} />
-        </div>
-
-        {/* Submit */}
         <div style={{ marginBottom: '3rem' }}>
           <button type="submit" className="apply-btn-primary" disabled={submitting}>
             {submitting ? 'Submitting...' : 'Submit'}

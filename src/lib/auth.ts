@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSession } from 'next-auth/react'
 import { UserRole } from './types'
 
 export interface CurrentUser {
@@ -9,22 +9,14 @@ export interface CurrentUser {
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const { data: { user } } = await supabase.auth.getUser()
+  const session = await getSession()
+  const user = session?.user as ({ role?: string; email?: string | null; name?: string | null }) | undefined
   if (!user?.email) return null
-
-  const { data } = await supabase
-    .from('authorized_users')
-    .select('role')
-    .ilike('email', user.email)
-    .maybeSingle()
-
-  if (!data) return null
-
   return {
-    id: user.id,
+    id: user.email,
     email: user.email,
-    name: user.user_metadata?.full_name ?? user.email,
-    role: data.role as UserRole,
+    name: user.name ?? user.email,
+    role: (user.role ?? 'grader') as UserRole,
   }
 }
 

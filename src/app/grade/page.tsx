@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
 import { getCurrentUser, CurrentUser } from '@/lib/auth'
 import { Applicant, EssayPrompt, Round } from '@/lib/types'
 
@@ -42,7 +41,7 @@ type CKey = 'comment0' | 'comment1' | 'comment2' | 'comment3' | 'comment4'
 
 interface ApplicantFull extends Applicant {
   essays: { prompt: EssayPrompt; response: string }[]
-  signedResumeUrl: string | null
+  resumeBase64: string | null
 }
 
 interface RoundSummary {
@@ -52,18 +51,11 @@ interface RoundSummary {
 }
 
 function defaultRatings(): Record<RKey, string> {
-  return { r0: '2', r1: '1', r2: '1', r3: '1', r4: '1', r5: '1', r6: '1', r7: '1', r8: '1', r9: '1' }
+  return { r0: '', r1: '', r2: '', r3: '', r4: '', r5: '', r6: '', r7: '', r8: '', r9: '' }
 }
 
 function defaultComments(): Record<CKey, string> {
   return { comment0: '', comment1: '', comment2: '', comment3: '', comment4: '' }
-}
-
-async function getSignedResumeUrl(resumeUrl: string): Promise<string | null> {
-  const match = resumeUrl.match(/\/resumes\/(.+)$/)
-  if (!match) return resumeUrl
-  const { data } = await supabase.storage.from('resumes').createSignedUrl(match[1], 3600)
-  return data?.signedUrl ?? resumeUrl
 }
 
 export default function GradePage() {
@@ -106,10 +98,9 @@ export default function GradePage() {
     setLoadingRounds(true)
 
     // All assignments for this grader
-    const { data: assignments } = await supabase
-      .from('grader_assignments')
-      .select('round_id, applicant_id')
-      .eq('grader_email', graderEmail)
+    const assignments: { round_id: string; applicant_id: string }[] = await fetch(
+      `/api/grader-assignments?grader_email=${encodeURIComponent(graderEmail)}`
+    ).then(r => r.json())
 
     if (!assignments?.length) {
       setRoundSummaries([])
@@ -118,10 +109,9 @@ export default function GradePage() {
     }
 
     // All reviews already submitted by this grader
-    const { data: reviews } = await supabase
-      .from('reviews')
-      .select('round_id, applicant_id')
-      .eq('grader_email', graderEmail)
+    const reviews: { round_id: string; applicant_id: string }[] = await fetch(
+      `/api/reviews?grader_email=${encodeURIComponent(graderEmail)}`
+    ).then(r => r.json())
 
     const reviewedSet = new Set(
       (reviews ?? []).map(r => `${r.round_id}::${r.applicant_id}`)
@@ -136,16 +126,16 @@ export default function GradePage() {
       if (reviewedSet.has(`${a.round_id}::${a.applicant_id}`)) entry.completed++
     }
 
-    // Load round details
+    // Load round details individually
     const roundIds = [...roundMap.keys()]
-    const { data: rounds } = await supabase
-      .from('rounds')
-      .select('*')
-      .in('id', roundIds)
-      .order('order_index')
+    const roundResults = await Promise.all(
+      roundIds.map(id => fetch(`/api/rounds/${id}`).then(r => r.ok ? r.json() : null))
+    )
+    const rounds = roundResults.filter(Boolean) as Round[]
+    rounds.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
 
-    const summaries: RoundSummary[] = (rounds ?? []).map(r => ({
-      round: r as Round,
+    const summaries: RoundSummary[] = rounds.map(r => ({
+      round: r,
       total: roundMap.get(r.id)!.total,
       completed: roundMap.get(r.id)!.completed,
     }))
@@ -174,24 +164,20 @@ export default function GradePage() {
     setRatings(defaultRatings())
     setComments(defaultComments())
 
-    // Get assigned applicant IDs
-    const { data: assignments } = await supabase
-      .from('grader_assignments')
-      .select('applicant_id')
-      .eq('round_id', roundId)
-      .eq('grader_email', graderEmail)
+    // Get assigned applicant IDs for this round
+    const assignments: { applicant_id: string }[] = await fetch(
+      `/api/grader-assignments?round_id=${roundId}&grader_email=${encodeURIComponent(graderEmail)}`
+    ).then(r => r.json())
 
-    const assignedIds = (assignments ?? []).map(a => a.applicant_id as string)
+    const assignedIds = (assignments ?? []).map(a => a.applicant_id)
     setTotalAssigned(assignedIds.length)
 
     // Get already-reviewed applicant IDs
-    const { data: reviews } = await supabase
-      .from('reviews')
-      .select('applicant_id')
-      .eq('round_id', roundId)
-      .eq('grader_email', graderEmail)
+    const reviews: { applicant_id: string }[] = await fetch(
+      `/api/reviews?round_id=${roundId}&grader_email=${encodeURIComponent(graderEmail)}`
+    ).then(r => r.json())
 
-    const reviewedIds = new Set((reviews ?? []).map(r => r.applicant_id as string))
+    const reviewedIds = new Set((reviews ?? []).map(r => r.applicant_id))
     setCompletedCount(reviewedIds.size)
 
     const pendingIds = assignedIds.filter(id => !reviewedIds.has(id))
@@ -202,46 +188,20 @@ export default function GradePage() {
       return
     }
 
-    // Load applicants
-    const { data: applicants } = await supabase
-      .from('applicants')
-      .select('*')
-      .in('id', pendingIds)
-
-    // Load essay prompts for the cycle (we'll fetch cycle_id from the first applicant)
-    const firstApplicant = applicants?.[0] as Applicant | undefined
-    let prompts: EssayPrompt[] = []
-    if (firstApplicant) {
-      const { data: promptData } = await supabase
-        .from('essay_prompts')
-        .select('*')
-        .eq('cycle_id', firstApplicant.cycle_id)
-        .order('question_number')
-      prompts = (promptData as EssayPrompt[]) ?? []
-    }
-
-    // Load all essay responses for pending applicants
-    const { data: responses } = await supabase
-      .from('essay_responses')
-      .select('applicant_id, prompt_id, response')
-      .in('applicant_id', pendingIds)
-
-    const responseMap = new Map<string, string>()
-    for (const r of responses ?? []) {
-      responseMap.set(`${r.applicant_id}::${r.prompt_id}`, r.response)
-    }
-
-    // Build queue with signed resume URLs
+    // Load essays+prompts for each pending applicant
     const fullQueue: ApplicantFull[] = await Promise.all(
-      (applicants as Applicant[]).map(async (app) => {
-        const essays = prompts.map(p => ({
-          prompt: p,
-          response: responseMap.get(`${app.id}::${p.id}`) ?? '',
-        }))
-        const signedResumeUrl = app.resume_url
-          ? await getSignedResumeUrl(app.resume_url)
-          : null
-        return { ...app, essays, signedResumeUrl }
+      pendingIds.map(async (applicantId) => {
+        const [essayData, resumeData] = await Promise.all([
+          fetch(`/api/applicants/${applicantId}/essays`).then(r => r.ok ? r.json() : null),
+          fetch(`/api/applicants/${applicantId}/resume`).then(r => r.ok ? r.json() : null),
+        ])
+
+        // essayData shape: { applicant: Applicant, essays: { prompt: EssayPrompt, response: string }[] }
+        const applicant: Applicant = essayData?.applicant ?? { id: applicantId }
+        const essays: { prompt: EssayPrompt; response: string }[] = essayData?.essays ?? []
+        const resumeBase64: string | null = resumeData?.resume_base64 ?? null
+
+        return { ...applicant, essays, resumeBase64 }
       })
     )
 
@@ -263,30 +223,35 @@ export default function GradePage() {
     if (!applicant) return
 
     setSubmitting(true)
-    const { error } = await supabase.from('reviews').insert({
-      round_id: selectedRoundId,
-      applicant_id: applicant.id,
-      grader_email: user.email,
-      r0: Number(ratings.r0),
-      r1: Number(ratings.r1),
-      r2: Number(ratings.r2),
-      r3: Number(ratings.r3),
-      r4: Number(ratings.r4),
-      r5: Number(ratings.r5),
-      r6: Number(ratings.r6),
-      r7: Number(ratings.r7),
-      r8: Number(ratings.r8),
-      r9: Number(ratings.r9),
-      comment0: comments.comment0 || null,
-      comment1: comments.comment1 || null,
-      comment2: comments.comment2 || null,
-      comment3: comments.comment3 || null,
-      comment4: comments.comment4 || null,
+    const res = await fetch('/api/reviews', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        round_id: selectedRoundId,
+        applicant_id: applicant.id,
+        grader_email: user.email,
+        r0: Number(ratings.r0),
+        r1: Number(ratings.r1),
+        r2: Number(ratings.r2),
+        r3: Number(ratings.r3),
+        r4: Number(ratings.r4),
+        r5: Number(ratings.r5),
+        r6: Number(ratings.r6),
+        r7: Number(ratings.r7),
+        r8: Number(ratings.r8),
+        r9: Number(ratings.r9),
+        comment0: comments.comment0 || null,
+        comment1: comments.comment1 || null,
+        comment2: comments.comment2 || null,
+        comment3: comments.comment3 || null,
+        comment4: comments.comment4 || null,
+      }),
     })
 
     setSubmitting(false)
-    if (error) {
-      alert('Submission failed: ' + error.message)
+    if (!res.ok) {
+      const err = await res.json()
+      alert('Submission failed: ' + (err.error ?? res.statusText))
       return
     }
 
@@ -501,17 +466,39 @@ export default function GradePage() {
               </Section>
 
               {/* Confirm essay reviews */}
-              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5">
-                <p className="text-sm text-[var(--text-muted)] mb-3">
-                  Please confirm your essay reviews before moving on. You cannot edit your current responses beyond this point.
-                </p>
-                <button
-                  className="px-4 py-2 rounded-lg bg-[var(--bg-raised)] border border-[var(--border)] text-[var(--text-primary)] font-medium hover:bg-[var(--bg-active)] transition-colors"
-                  onClick={() => setEssayConfirmed(true)}
-                >
-                  Confirm Essay Reviews →
-                </button>
-              </div>
+              {(() => {
+                const emptyComments = ESSAY_RUBRIC.map((r) => ({
+                  label: r.label,
+                  empty: !comments[r.commentKey as CKey].trim(),
+                })).concat([{ label: 'Time Commitments', empty: !comments.comment4.trim() }]).filter(c => c.empty)
+                const essayRatingKeys: RKey[] = ['r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r0']
+                const emptyRatings = essayRatingKeys.filter(k => !ratings[k])
+                const canConfirm = emptyComments.length === 0 && emptyRatings.length === 0
+                return (
+                  <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5">
+                    <p className="text-sm text-[var(--text-muted)] mb-3">
+                      Please confirm your essay reviews before moving on. You cannot edit your current responses beyond this point.
+                    </p>
+                    {emptyComments.length > 0 && (
+                      <p className="text-xs text-amber-500 mb-2">
+                        Missing comments for: {emptyComments.map(c => c.label).join(', ')}
+                      </p>
+                    )}
+                    {emptyRatings.length > 0 && (
+                      <p className="text-xs text-amber-500 mb-3">
+                        Please select a rating for all questions
+                      </p>
+                    )}
+                    <button
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-raised)] border border-[var(--border)] text-[var(--text-primary)] font-medium hover:bg-[var(--bg-active)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setEssayConfirmed(true)}
+                      disabled={!canConfirm}
+                    >
+                      Confirm Essay Reviews →
+                    </button>
+                  </div>
+                )
+              })()}
             </>
           )}
 
@@ -520,9 +507,9 @@ export default function GradePage() {
           {essayConfirmed && (
             <>
               <Section label="Resume / CV">
-                {applicant.signedResumeUrl ? (
+                {applicant.resumeBase64 ? (
                   <iframe
-                    src={applicant.signedResumeUrl}
+                    src={`data:application/pdf;base64,${applicant.resumeBase64}`}
                     className="w-full rounded-lg border border-[var(--border)]"
                     style={{ height: '70vh' }}
                   />
@@ -556,15 +543,29 @@ export default function GradePage() {
                 </div>
               </Section>
 
-              <div className="pb-12">
-                <button
-                  className="w-full py-3 rounded-lg bg-[#ff8a00] text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
-                  onClick={handleSubmit}
-                  disabled={submitting}
-                >
-                  {submitting ? 'Submitting…' : 'Submit Review'}
-                </button>
-              </div>
+              {(() => {
+                const resumeRatingKeys: RKey[] = ['r1', 'r2', 'r3']
+                const missingResumeRatings = resumeRatingKeys.some(k => !ratings[k])
+                const missingResumeComment = !comments.comment0.trim()
+                const canSubmit = !missingResumeComment && !missingResumeRatings
+                return (
+                  <div className="pb-12 space-y-2">
+                    {missingResumeComment && (
+                      <p className="text-xs text-amber-500">Missing comment for Resume / CV</p>
+                    )}
+                    {missingResumeRatings && (
+                      <p className="text-xs text-amber-500">Please select a rating for all resume questions</p>
+                    )}
+                    <button
+                      className="w-full py-3 rounded-lg bg-[#ff8a00] text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={handleSubmit}
+                      disabled={submitting || !canSubmit}
+                    >
+                      {submitting ? 'Submitting…' : 'Submit Review'}
+                    </button>
+                  </div>
+                )
+              })()}
             </>
           )}
         </div>
@@ -625,6 +626,7 @@ function RatingSelect({
         value={value}
         onChange={e => onChange(e.target.value)}
       >
+        <option value="" disabled>Select an option</option>
         {options.map(opt => {
           const v = typeof opt === 'number' ? String(opt) : opt.value
           const l = typeof opt === 'number' ? String(opt) : opt.label

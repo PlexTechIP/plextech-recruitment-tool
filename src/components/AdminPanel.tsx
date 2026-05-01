@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
-import { Session } from '@/lib/types'
+import { useRouter } from 'next/navigation'
+import { Session, GradingType } from '@/lib/types'
 import { parseDelibCSV } from '@/lib/csv'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 }
 
 export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
+  const router = useRouter()
   const [tab, setTab] = useState<'session' | 'emails'>('session')
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
@@ -42,8 +43,9 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
 
   async function loadEmails() {
     setEmailsLoading(true)
-    const { data } = await supabase.from('authorized_emails').select('id, email, added_by').order('added_at')
-    setAuthorizedEmails(data ?? [])
+    const res = await fetch('/api/authorized-users')
+    const data = res.ok ? await res.json() : []
+    setAuthorizedEmails(data)
     setEmailsLoading(false)
   }
 
@@ -54,9 +56,15 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
       return
     }
     const adminEmail = session.created_by
-    const { error } = await supabase.from('authorized_emails').insert({ email, added_by: adminEmail })
-    if (error) {
-      setEmailError(error.code === '23505' ? 'That email is already authorized.' : error.message)
+    const res = await fetch('/api/authorized-users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, added_by: adminEmail }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      const msg: string = body?.error ?? ''
+      setEmailError(msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('already') ? 'That email is already authorized.' : (msg || 'Failed to add email.'))
     } else {
       setNewEmail('')
       setEmailError('')
@@ -74,8 +82,15 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
     const emails = bulkEmails.split(/[\n,]+/).map(e => e.trim()).filter(e => e.includes('@'))
     if (emails.length === 0) { setEmailError('No valid emails found.'); return }
     const adminEmail = session.created_by
-    const rows = emails.map(email => ({ email: email.toLowerCase(), added_by: adminEmail }))
-    await supabase.from('authorized_emails').upsert(rows, { onConflict: 'email' })
+    await Promise.all(
+      emails.map(email =>
+        fetch('/api/authorized-users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.toLowerCase(), added_by: adminEmail }),
+        })
+      )
+    )
     setBulkEmails('')
     setShowBulk(false)
     setEmailError('')
@@ -83,7 +98,7 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
   }
 
   async function removeEmail(id: string) {
-    await supabase.from('authorized_emails').delete().eq('id', id)
+    await fetch(`/api/authorized-users/${id}`, { method: 'DELETE' })
     await loadEmails()
   }
 
@@ -105,9 +120,14 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
     }
     setImportStatus(`Importing ${candidates.length} candidates...`)
     const rows = candidates.map(c => ({ session_id: sessionId, name: c.name, data: c.data, status: 'pending' }))
-    const { error } = await supabase.from('candidates').insert(rows)
-    if (error) {
-      setImportStatus('Import failed: ' + error.message)
+    const res = await fetch(`/api/sessions/${sessionId}/candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rows),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      setImportStatus('Import failed: ' + (body?.error ?? res.statusText))
     } else {
       setImportStatus(`Imported ${candidates.length} candidates.`)
       await onRefresh()
@@ -133,7 +153,11 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
 
   async function toggleAnonymous() {
     setTogglingAnon(true)
-    await supabase.from('sessions').update({ anonymous: !session.anonymous }).eq('id', sessionId)
+    await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anonymous: !session.anonymous }),
+    })
     await onRefresh()
     setTogglingAnon(false)
   }
@@ -141,21 +165,126 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
   async function handleEndSession() {
     if (!confirm('End this session? Members will no longer be able to vote.')) return
     setEnding(true)
-    await supabase.from('sessions').update({ status: 'ended' }).eq('id', sessionId)
+    await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ended' }),
+    })
     await onRefresh()
     setEnding(false)
   }
 
   async function handleReactivate() {
-    await supabase.from('sessions').update({ status: 'active' }).eq('id', sessionId)
+    await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active' }),
+    })
     await onRefresh()
+  }
+
+  // ── Advance to Next Round ─────────────────────────────────
+  const [nextRoundName, setNextRoundName] = useState('')
+  const [nextRoundType, setNextRoundType] = useState<GradingType | ''>('rubric')
+  const [advancing, setAdvancing] = useState(false)
+  const [advanceMessage, setAdvanceMessage] = useState('')
+
+  async function handleAdvanceRound() {
+    const name = nextRoundName.trim()
+    if (!name) { setAdvanceMessage('Enter a name for the new round.'); return }
+    if (!session.round_id) { setAdvanceMessage('This session is not linked to a round.'); return }
+    setAdvancing(true)
+    setAdvanceMessage('')
+
+    try {
+      // Look up current round to get cycle_id and order_index
+      const roundRes = await fetch(`/api/rounds/${session.round_id}`)
+      if (!roundRes.ok) throw new Error('Could not load current round.')
+      const currentRound = await roundRes.json()
+
+      // Create new round
+      const newRoundRes = await fetch('/api/rounds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cycle_id: currentRound.cycle_id,
+          name,
+          order_index: currentRound.order_index + 1,
+          grading_type: nextRoundType || null,
+          status: 'pending',
+        }),
+      })
+      if (!newRoundRes.ok) {
+        const body = await newRoundRes.json().catch(() => ({}))
+        throw new Error('Could not create round: ' + (body?.error ?? newRoundRes.statusText))
+      }
+      const newRound = await newRoundRes.json()
+
+      // Get accepted candidates from current session
+      const candsRes = await fetch(`/api/sessions/${sessionId}/candidates`)
+      const allCands = candsRes.ok ? await candsRes.json() : []
+      const accepted = allCands.filter((c: { status: string }) => c.status === 'accepted')
+      if (!accepted.length) throw new Error('No accepted candidates to advance.')
+
+      // Create new session
+      const newSessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
+      const sessionRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: newSessionId,
+          round_id: newRound.id,
+          name: `${name} Deliberation`,
+          status: 'active',
+          created_by: session.created_by,
+          anonymous: false,
+        }),
+      })
+      if (!sessionRes.ok) {
+        const body = await sessionRes.json().catch(() => ({}))
+        throw new Error('Could not create session: ' + (body?.error ?? sessionRes.statusText))
+      }
+
+      // Add creator as member
+      await fetch('/api/session-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: newSessionId, user_email: session.created_by }),
+      })
+
+      // Insert accepted candidates into new session (carry over scores from data)
+      const candidateRows = accepted.map((c: { applicant_id: string; name: string; data: Record<string, unknown> }, idx: number) => ({
+        session_id: newSessionId,
+        applicant_id: c.applicant_id,
+        name: c.name,
+        status: 'pending',
+        data: { ...(c.data as Record<string, unknown>), candidate_number: idx + 1 },
+      }))
+      await fetch(`/api/sessions/${newSessionId}/candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(candidateRows),
+      })
+
+      setAdvanceMessage(`Created! Redirecting to new session…`)
+      setTimeout(() => router.push(`/session/${newSessionId}`), 1200)
+    } catch (err: unknown) {
+      setAdvanceMessage(err instanceof Error ? err.message : 'Unknown error.')
+    } finally {
+      setAdvancing(false)
+    }
   }
 
   async function handleClearCandidates() {
     if (!confirm('Delete ALL candidates and votes? This cannot be undone.')) return
-    const { data: cands } = await supabase.from('candidates').select('id').eq('session_id', sessionId)
-    if (cands?.length) await supabase.from('votes').delete().in('candidate_id', cands.map((c: { id: string }) => c.id))
-    await supabase.from('candidates').delete().eq('session_id', sessionId)
+    const candsRes = await fetch(`/api/sessions/${sessionId}/candidates`)
+    const cands = candsRes.ok ? await candsRes.json() : []
+    // Delete each candidate (API should cascade votes, or delete individually)
+    await Promise.all(
+      cands.map((c: { id: string }) =>
+        fetch(`/api/candidates/${c.id}`, { method: 'DELETE' })
+      )
+    )
     await onRefresh()
     setImportStatus('All candidates cleared.')
   }
@@ -272,6 +401,43 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
                   </button>
                 )}
               </div>
+
+              {/* Advance to Next Round */}
+              {session.round_id && (
+                <div className="border-t border-[var(--border)] pt-4 space-y-2">
+                  <p className="text-sm font-medium text-[var(--text-secondary)]">Advance to Next Round</p>
+                  <p className="text-xs text-[var(--text-muted)]">Creates a new round and session with only the accepted candidates from this session.</p>
+                  <input
+                    type="text"
+                    value={nextRoundName}
+                    onChange={e => setNextRoundName(e.target.value)}
+                    placeholder="New round name (e.g. Interviews)"
+                    className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
+                  />
+                  <select
+                    value={nextRoundType}
+                    onChange={e => setNextRoundType(e.target.value as GradingType | '')}
+                    className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
+                  >
+                    <option value="rubric">Rubric grading</option>
+                    <option value="interview">Interview grading</option>
+                    <option value="">Deliberation only</option>
+                  </select>
+                  <button
+                    onClick={handleAdvanceRound}
+                    disabled={advancing}
+                    className="w-full plex-gradient disabled:opacity-50 text-white text-sm font-medium py-2 rounded-lg"
+                  >
+                    {advancing ? 'Creating…' : 'Advance Accepted Candidates →'}
+                  </button>
+                  {advanceMessage && (
+                    <p className={`text-xs ${advanceMessage.startsWith('Created') ? 'text-green-400' : 'text-red-400'}`}>
+                      {advanceMessage}
+                    </p>
+                  )}
+                </div>
+              )}
+
             </div>
           ) : (
             <div className="p-4 space-y-4">

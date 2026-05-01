@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { signOut } from 'next-auth/react'
 import { getCurrentUser, canCreateSession, canManageUsers, CurrentUser } from '@/lib/auth'
 import { Session, AuthorizedUser, UserRole } from '@/lib/types'
 import ThemeToggle from '@/components/ThemeToggle'
@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [mySessions, setMySessions] = useState<Session[]>([])
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [pendingGrading, setPendingGrading] = useState<number | null>(null)
 
   // Join / create
   const [tab, setTab] = useState<'join' | 'create'>('join')
@@ -39,36 +40,18 @@ export default function Dashboard() {
     setTimeout(() => setCopiedId(null), 1500)
   }
 
-  const loadSessions = useCallback(async (email: string, authId: string) => {
-    const [byEmail, byUuid, byCreator] = await Promise.all([
-      supabase.from('session_members').select('session_id').eq('user_email', email),
-      supabase.from('session_members').select('session_id').eq('user_email', authId),
-      supabase.from('sessions').select('id').eq('created_by', email),
-    ])
-
-    const sessionIdSet = new Set<string>()
-    byEmail.data?.forEach((r: { session_id: string }) => sessionIdSet.add(r.session_id))
-    byUuid.data?.forEach((r: { session_id: string }) => sessionIdSet.add(r.session_id))
-    byCreator.data?.forEach((r: { id: string }) => sessionIdSet.add(r.id))
-
-    if (sessionIdSet.size === 0) return
-
-    const { data: sessions } = await supabase
-      .from('sessions')
-      .select('*')
-      .in('id', Array.from(sessionIdSet))
-      .order('created_at', { ascending: false })
-
-    setMySessions((sessions as Session[]) ?? [])
+  const loadSessions = useCallback(async (email: string) => {
+    const allSessions: Session[] = await fetch('/api/sessions').then(r => r.json())
+    const mine = allSessions.filter(
+      s => s.created_by === email
+    )
+    setMySessions(mine)
   }, [])
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true)
-    const { data } = await supabase
-      .from('authorized_users')
-      .select('*')
-      .order('added_at')
-    setAuthorizedUsers((data as AuthorizedUser[]) ?? [])
+    const data: AuthorizedUser[] = await fetch('/api/authorized-users').then(r => r.json())
+    setAuthorizedUsers(data ?? [])
     setUsersLoading(false)
   }, [])
 
@@ -80,7 +63,18 @@ export default function Dashboard() {
         return
       }
       setCurrentUser(user)
-      await loadSessions(user.email, user.id)
+      await Promise.all([
+        loadSessions(user.email),
+        (async () => {
+          const [assignments, reviews] = await Promise.all([
+            fetch(`/api/grader-assignments?grader_email=${encodeURIComponent(user.email)}`).then(r => r.json()),
+            fetch(`/api/reviews?grader_email=${encodeURIComponent(user.email)}`).then(r => r.json()),
+          ])
+          const assigned: number = Array.isArray(assignments) ? assignments.length : 0
+          const reviewed: number = Array.isArray(reviews) ? reviews.length : 0
+          setPendingGrading(Math.max(0, assigned - reviewed))
+        })(),
+      ])
       if (canManageUsers(user.role)) await loadUsers()
       setLoading(false)
     }
@@ -88,8 +82,7 @@ export default function Dashboard() {
   }, [router, loadSessions, loadUsers])
 
   async function handleSignOut() {
-    await supabase.auth.signOut()
-    router.replace('/')
+    await signOut({ callbackUrl: '/' })
   }
 
   async function handleJoin(e: React.FormEvent) {
@@ -99,16 +92,16 @@ export default function Dashboard() {
     const sessionId = joinSessionId.trim().toUpperCase()
     if (!sessionId) { setJoinError('Enter a session ID.'); setJoinLoading(false); return }
 
-    const { data: session, error } = await supabase
-      .from('sessions').select('id, status').eq('id', sessionId).single()
-
-    if (error || !session) { setJoinError('Session not found.'); setJoinLoading(false); return }
+    const res = await fetch(`/api/sessions/${sessionId}`)
+    if (!res.ok) { setJoinError('Session not found.'); setJoinLoading(false); return }
+    const session = await res.json()
     if (session.status === 'ended') { setJoinError('This session has ended.'); setJoinLoading(false); return }
 
-    await supabase.from('session_members').upsert(
-      { session_id: sessionId, user_email: currentUser!.email, joined_at: new Date().toISOString() },
-      { onConflict: 'session_id,user_email' }
-    )
+    await fetch('/api/session-members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, user_email: currentUser!.email }),
+    })
     router.push(`/session/${sessionId}`)
   }
 
@@ -120,16 +113,26 @@ export default function Dashboard() {
     if (!sessionName) { setCreateError('Enter a session name.'); setCreateLoading(false); return }
 
     const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
-    const { error } = await supabase.from('sessions').insert({
-      id: sessionId, name: sessionName, status: 'active',
-      created_by: currentUser!.email, anonymous: false,
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: sessionId, name: sessionName, status: 'active',
+        created_by: currentUser!.email, anonymous: false,
+      }),
     })
-    if (error) { setCreateError('Failed to create session: ' + error.message); setCreateLoading(false); return }
+    if (!res.ok) {
+      const err = await res.json()
+      setCreateError('Failed to create session: ' + (err.error ?? res.statusText))
+      setCreateLoading(false)
+      return
+    }
 
-    await supabase.from('session_members').upsert(
-      { session_id: sessionId, user_email: currentUser!.email, joined_at: new Date().toISOString() },
-      { onConflict: 'session_id,user_email' }
-    )
+    await fetch('/api/session-members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, user_email: currentUser!.email }),
+    })
     router.push(`/session/${sessionId}`)
   }
 
@@ -137,13 +140,14 @@ export default function Dashboard() {
     e.preventDefault()
     const email = newEmail.trim().toLowerCase()
     if (!email || !email.includes('@')) { setUserError('Enter a valid email.'); return }
-    const { error } = await supabase.from('authorized_users').insert({
-      email,
-      role: newRole,
-      added_by: currentUser!.email,
+    const res = await fetch('/api/authorized-users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role: newRole, added_by: currentUser!.email }),
     })
-    if (error) {
-      setUserError(error.code === '23505' ? 'Already authorized.' : error.message)
+    if (!res.ok) {
+      const err = await res.json()
+      setUserError(err.error ?? 'Failed to add user.')
     } else {
       setNewEmail(''); setUserError(''); await loadUsers()
     }
@@ -153,18 +157,27 @@ export default function Dashboard() {
     e.preventDefault()
     const emails = bulkEmails.split(/[\n,]+/).map(e => e.trim()).filter(e => e.includes('@'))
     if (emails.length === 0) { setUserError('No valid emails found.'); return }
-    const rows = emails.map(email => ({ email: email.toLowerCase(), role: newRole, added_by: currentUser!.email }))
-    await supabase.from('authorized_users').upsert(rows, { onConflict: 'email' })
+    await Promise.all(emails.map(email =>
+      fetch('/api/authorized-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase(), role: newRole, added_by: currentUser!.email }),
+      })
+    ))
     setBulkEmails(''); setShowBulk(false); setUserError(''); await loadUsers()
   }
 
   async function updateUserRole(id: string, role: UserRole) {
-    await supabase.from('authorized_users').update({ role }).eq('id', id)
+    await fetch(`/api/authorized-users/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    })
     await loadUsers()
   }
 
   async function removeUser(id: string) {
-    await supabase.from('authorized_users').delete().eq('id', id)
+    await fetch(`/api/authorized-users/${id}`, { method: 'DELETE' })
     await loadUsers()
   }
 
@@ -211,9 +224,9 @@ export default function Dashboard() {
 
       <div className="flex-1 p-4 max-w-2xl mx-auto w-full space-y-6 pt-8">
 
-        {/* Admin shortcuts */}
-        {isAdmin && (
-          <div className="grid grid-cols-2 gap-3">
+        {/* Shortcuts */}
+        <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          {isAdmin && (
             <button
               onClick={() => router.push('/admin')}
               className="bg-[var(--bg-surface)] hover:bg-[var(--bg-raised)] border border-[var(--border)] rounded-xl px-4 py-3 text-left transition-colors"
@@ -221,28 +234,28 @@ export default function Dashboard() {
               <p className="font-medium text-[var(--text-primary)] text-sm">Admin Console</p>
               <p className="text-xs text-[var(--text-muted)] mt-0.5">Cycles, rounds, assignments</p>
             </button>
-            <button
-              onClick={() => router.push('/grade')}
-              className="bg-[var(--bg-surface)] hover:bg-[var(--bg-raised)] border border-[var(--border)] rounded-xl px-4 py-3 text-left transition-colors"
-            >
+          )}
+          <button
+            onClick={() => router.push('/grade')}
+            className="bg-[var(--bg-surface)] hover:bg-[var(--bg-raised)] border border-[var(--border)] rounded-xl px-4 py-3 text-left transition-colors"
+          >
+            <div className="flex items-center justify-between">
               <p className="font-medium text-[var(--text-primary)] text-sm">Grading Queue</p>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">Review applicants</p>
-            </button>
-          </div>
-        )}
-
-        {/* Leadership shortcut */}
-        {isLeadership && !isAdmin && (
-          <div>
-            <button
-              onClick={() => router.push('/grade')}
-              className="w-full bg-[var(--bg-surface)] hover:bg-[var(--bg-raised)] border border-[var(--border)] rounded-xl px-4 py-3 text-left transition-colors"
-            >
-              <p className="font-medium text-[var(--text-primary)] text-sm">Grading Queue</p>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5">Review applicants assigned to you</p>
-            </button>
-          </div>
-        )}
+              {pendingGrading !== null && pendingGrading > 0 && (
+                <span className="text-xs bg-[#FF6B35] text-white font-bold px-2 py-0.5 rounded-full">
+                  {pendingGrading}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              {pendingGrading === null
+                ? 'Review applicants assigned to you'
+                : pendingGrading === 0
+                  ? 'No pending reviews'
+                  : `${pendingGrading} applicant${pendingGrading === 1 ? '' : 's'} to review`}
+            </p>
+          </button>
+        </div>
 
         {/* Join / Create session */}
         <div className="bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] overflow-hidden">

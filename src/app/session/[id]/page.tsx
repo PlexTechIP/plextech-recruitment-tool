@@ -2,11 +2,10 @@
 
 import { useEffect, useState, useCallback, use } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { useSession, signOut } from 'next-auth/react'
 import { Session, Candidate, Vote, VoteType, CandidateNote } from '@/lib/types'
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
-import type { User } from '@supabase/supabase-js'
 
 const STATUS_COLORS: Record<string, string> = {
   accepted: 'bg-green-500',
@@ -32,8 +31,8 @@ const STATUS_BTN: Record<string, { active: string; inactive: string }> = {
 export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = use(params)
   const router = useRouter()
+  const { data: authSession, status: authStatus } = useSession()
 
-  const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [votes, setVotes] = useState<Vote[]>([])
@@ -52,50 +51,50 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     setTimeout(() => setIdCopied(false), 1500)
   }
 
-  const isAdmin = user != null && session != null && user.email === session.created_by
+  const userEmail = authSession?.user?.email ?? ''
+  const userName = authSession?.user?.name ?? userEmail
+
+  const isAdmin = !!userEmail && !!session && userEmail === session.created_by
 
   const loadData = useCallback(async () => {
     const [sessionRes, candidatesRes, membersRes] = await Promise.all([
-      supabase.from('sessions').select('*').eq('id', sessionId).single(),
-      supabase.from('candidates').select('*').eq('session_id', sessionId).order('created_at'),
-      supabase.from('session_members').select('user_email').eq('session_id', sessionId),
+      fetch(`/api/sessions/${sessionId}`),
+      fetch(`/api/sessions/${sessionId}/candidates`),
+      fetch(`/api/session-members?session_id=${sessionId}`),
     ])
 
-    const rawCands = candidatesRes.data ?? []
+    const sessionData = sessionRes.ok ? await sessionRes.json() : null
+    const rawCands: Candidate[] = candidatesRes.ok ? await candidatesRes.json() : []
+    const membersData = membersRes.ok ? await membersRes.json() : []
+
     const cands = rawCands.map((c: Candidate) => ({
       ...c,
       data: typeof c.data === 'string' ? JSON.parse(c.data) : c.data,
     }))
-    if (sessionRes.data) setSession(sessionRes.data)
+
+    if (sessionData) setSession(sessionData)
     setCandidates(cands)
-    setMemberCount(membersRes.data?.length ?? 0)
+    setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
 
     if (cands.length > 0) {
-      const { data: votesData } = await supabase
-        .from('votes').select('*')
-        .in('candidate_id', cands.map((c: Candidate) => c.id))
-      setVotes(votesData ?? [])
+      const ids = cands.map((c: Candidate) => c.id).join(',')
+      const votesRes = await fetch(`/api/votes?candidate_ids=${ids}`)
+      const votesData = votesRes.ok ? await votesRes.json() : []
+      setVotes(votesData)
     } else {
       setVotes([])
     }
   }, [sessionId])
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) { router.replace('/'); return }
-      setUser(data.user)
-      loadData().then(() => setLoading(false))
-    })
+    if (authStatus === 'loading') return
+    if (authStatus === 'unauthenticated') { router.replace('/'); return }
 
-    const channel = supabase
-      .channel(`session-${sessionId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'votes' }, loadData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'candidates' }, loadData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions' }, loadData)
-      .subscribe()
+    loadData().then(() => setLoading(false))
 
-    return () => { supabase.removeChannel(channel) }
-  }, [sessionId, router, loadData])
+    const interval = setInterval(loadData, 3000)
+    return () => clearInterval(interval)
+  }, [authStatus, sessionId, router, loadData])
 
   // Keep selected in sync when candidates refresh
   useEffect(() => {
@@ -106,19 +105,31 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }, [candidates]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleVote(candidateId: string, voteType: VoteType) {
-    if (!user) return
-    const voterName = user.user_metadata?.full_name ?? user.email ?? ''
+    if (!userEmail) return
+    const voterName = userName
     const existing = votes.find(v => v.candidate_id === candidateId && v.voter_name === voterName && v.vote_type === voteType)
     if (existing) {
-      await supabase.from('votes').delete().eq('id', existing.id)
+      await fetch('/api/votes', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: existing.id }),
+      })
     } else {
-      await supabase.from('votes').insert({ candidate_id: candidateId, voter_name: voterName, vote_type: voteType })
+      await fetch('/api/votes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_id: candidateId, voter_name: voterName, vote_type: voteType }),
+      })
     }
     await loadData()
   }
 
   async function handleStatusChange(candidateId: string, status: string) {
-    await supabase.from('candidates').update({ status }).eq('id', candidateId)
+    await fetch(`/api/candidates/${candidateId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
     await loadData()
   }
 
@@ -127,20 +138,22 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       ? 'Leave this session? The session will remain active but you will lose admin controls.'
       : 'Leave this session?'
     if (!confirm(msg)) return
-    await supabase.from('session_members').delete()
-      .eq('session_id', sessionId)
-      .eq('user_email', user!.email!)
+    await fetch('/api/session-members', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, user_email: userEmail }),
+    })
     router.push('/dashboard')
   }
 
-  if (loading) {
+  if (authStatus === 'loading' || loading) {
     return <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center"><div className="text-gray-500 text-sm">Loading...</div></div>
   }
   if (!session) {
     return <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center"><div className="text-red-400">Session not found.</div></div>
   }
 
-  const myName = user?.user_metadata?.full_name ?? user?.email ?? ''
+  const myName = userName
 
   const STATUS_ORDER: Record<string, number> = { accepted: 0, hold: 1, pending: 2, rejected: 3 }
 
@@ -206,7 +219,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             className="text-xs text-[var(--text-muted)] hover:text-red-400 border border-[var(--border)] hover:border-red-900/60 px-2 py-1.5 rounded-lg transition-colors">
             Leave
           </button>
-          <button onClick={async () => { await supabase.auth.signOut(); router.replace('/') }}
+          <button onClick={() => signOut({ callbackUrl: '/' })}
             className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border)] px-2 py-1.5 rounded-lg transition-colors">
             Sign out
           </button>
@@ -452,31 +465,24 @@ function CandidateDetail({
 
   useEffect(() => {
     setNotes([])
-    supabase
-      .from('candidate_notes')
-      .select('*')
-      .eq('candidate_id', candidate.id)
-      .order('created_at')
-      .then(({ data }) => setNotes(data ?? []))
+    fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => setNotes(data))
   }, [candidate.id])
 
   async function submitNote(type: 'note' | 'red_flag') {
     const content = noteText.trim()
     if (!content) return
     setSubmitting(true)
-    await supabase.from('candidate_notes').insert({
-      candidate_id: candidate.id,
-      author: myName,
-      content,
-      type,
+    await fetch('/api/candidate-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ candidate_id: candidate.id, author: myName, content, type }),
     })
     setNoteText('')
-    const { data } = await supabase
-      .from('candidate_notes')
-      .select('*')
-      .eq('candidate_id', candidate.id)
-      .order('created_at')
-    setNotes(data ?? [])
+    const res = await fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
+    const data = res.ok ? await res.json() : []
+    setNotes(data)
     setSubmitting(false)
   }
 
