@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { GraderAssignment } from '@/lib/models'
+import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireRole('grader')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const { searchParams } = new URL(req.url)
-  const round_id = searchParams.get('round_id')
-  const grader_email = searchParams.get('grader_email')
+  const round_id = searchParams.get('round_id') ?? undefined
+  const grader_email = searchParams.get('grader_email') ?? undefined
+
+  // Graders can only fetch their own assignments
+  if (auth.role === 'grader' && grader_email && grader_email.toLowerCase() !== auth.email.toLowerCase()) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   const filter: Record<string, string> = {}
   if (round_id) filter.round_id = round_id
@@ -23,10 +32,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireRole('leadership')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const rows: { round_id: string; applicant_id: string; grader_email: string }[] = await req.json()
+  if (!Array.isArray(rows)) return NextResponse.json({ error: 'Expected array' }, { status: 400 })
 
-  // Upsert all rows
   const ops = rows.map(r => ({
     updateOne: {
       filter: { round_id: r.round_id, applicant_id: r.applicant_id, grader_email: r.grader_email.toLowerCase() },

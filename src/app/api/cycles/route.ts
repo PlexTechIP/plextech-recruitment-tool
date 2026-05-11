@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { RecruitmentCycle } from '@/lib/models'
+import { requireRole } from '@/lib/serverAuth'
 
 export async function GET() {
   await connectDB()
-  // Auto-close applications when deadline has passed
   await RecruitmentCycle.updateMany(
     { accepting_applications: true, application_deadline: { $lte: new Date() } },
     { $set: { accepting_applications: false } }
@@ -14,8 +14,14 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireRole('leadership')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const body = await req.json()
-  const cycle = await RecruitmentCycle.create(body)
+  const { name, status = 'active' } = body
+  if (!name?.trim()) return NextResponse.json({ error: 'name required' }, { status: 400 })
+
+  const cycle = await RecruitmentCycle.create({ name: name.trim(), status })
   return NextResponse.json({ ...cycle.toObject(), id: cycle._id.toString(), _id: undefined }, { status: 201 })
 }

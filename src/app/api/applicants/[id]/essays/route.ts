@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, EssayResponse, EssayPrompt } from '@/lib/models'
+import { Applicant, EssayResponse, EssayPrompt, GraderAssignment } from '@/lib/models'
+import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireRole('grader')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const { id } = await params
+
+  // Graders may only access applicants assigned to them; leadership can access anyone
+  if (auth.role === 'grader') {
+    const assigned = await GraderAssignment.exists({ applicant_id: id, grader_email: auth.email })
+    if (!assigned) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   const [applicantDoc, responses] = await Promise.all([
     Applicant.findById(id, { resume_base64: 0 }).lean(),
@@ -21,7 +31,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const essays = prompts.map(p => {
     const r = responses.find(r => r.prompt_id.toString() === p._id.toString())
     return {
-      prompt: { id: p._id.toString(), cycle_id: p.cycle_id.toString(), question_number: p.question_number, prompt: p.prompt, description: p.description },
+      prompt: { id: p._id.toString(), cycle_id: p.cycle_id.toString(), question_number: p.question_number, prompt: p.prompt, description: p.description, criterion1: p.criterion1 ?? null, criterion2: p.criterion2 ?? null },
       response: r?.response ?? '',
     }
   })

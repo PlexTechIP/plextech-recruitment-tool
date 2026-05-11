@@ -3,8 +3,12 @@ import { connectDB } from '@/lib/mongodb'
 import { GraderAssignment, Review, Applicant } from '@/lib/models'
 import { evaluateResults } from '@/lib/scoring'
 import { Review as ReviewType, Applicant as ApplicantType } from '@/lib/types'
+import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireRole('leadership')
+  if (auth instanceof NextResponse) return auth
+
   const { searchParams } = new URL(req.url)
   const round_id = searchParams.get('round_id')
   if (!round_id) return NextResponse.json({ error: 'round_id required' }, { status: 400 })
@@ -73,7 +77,6 @@ export async function GET(req: NextRequest) {
 
   const scores = evaluateResults(reviewsTyped, applicants)
 
-  // Per-applicant reviewer breakdown
   const reviewsByApplicant = new Map<string, { grader_email: string; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }[]>()
   for (const r of reviewsTyped) {
     if (!reviewsByApplicant.has(r.applicant_id)) reviewsByApplicant.set(r.applicant_id, [])
@@ -91,7 +94,6 @@ export async function GET(req: NextRequest) {
     assigned_count: assignments.filter(a => a.applicant_id.toString() === s.applicant_id).length,
   }))
 
-  // Also include applicants with no reviews yet
   const scoredIds = new Set(scores.map(s => s.applicant_id))
   for (const a of applicants) {
     if (!scoredIds.has(a.id)) {

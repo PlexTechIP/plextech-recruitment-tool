@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { Candidate } from '@/lib/models'
+import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireRole('grader')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const { id } = await params
   const candidates = await Candidate.find({ session_id: id }).sort({ created_at: 1 }).lean()
@@ -15,6 +19,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireRole('leadership')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   const { id } = await params
   const body = await req.json()
