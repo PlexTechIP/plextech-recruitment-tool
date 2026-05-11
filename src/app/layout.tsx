@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Delib Tool",
-  description: "Consulting club deliberation tool",
+  title: "Login | PlexTech - Berkeley",
+  description: "PlexTech - Berkeley recruitment portal",
 };
 
 export default function RootLayout({
