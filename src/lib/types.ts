@@ -64,6 +64,7 @@ export interface RecruitmentCycle {
   name: string
   status: CycleStatus
   accepting_applications: boolean
+  application_deadline: string | null
   created_at: string
 }
 
@@ -82,6 +83,7 @@ export interface Round {
   order_index: number
   grading_type: GradingType | null
   status: RoundStatus
+  interview_form_url: string | null
   created_at: string
 }
 
@@ -110,6 +112,8 @@ export interface EssayPrompt {
   question_number: number
   prompt: string
   description: string | null
+  criterion1: string | null
+  criterion2: string | null
 }
 
 export interface EssayResponse {

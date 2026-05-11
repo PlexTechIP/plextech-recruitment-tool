@@ -17,3 +17,12 @@ export async function POST(req: NextRequest) {
   const note = await CandidateNote.create(body)
   return NextResponse.json({ ...note.toObject(), id: note._id.toString(), _id: undefined }, { status: 201 })
 }
+
+export async function DELETE(req: NextRequest) {
+  await connectDB()
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+  await CandidateNote.findByIdAndDelete(id)
+  return NextResponse.json({ ok: true })
+}

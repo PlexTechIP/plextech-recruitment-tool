@@ -4,6 +4,11 @@ import { RecruitmentCycle } from '@/lib/models'
 
 export async function GET() {
   await connectDB()
+  // Auto-close applications when deadline has passed
+  await RecruitmentCycle.updateMany(
+    { accepting_applications: true, application_deadline: { $lte: new Date() } },
+    { $set: { accepting_applications: false } }
+  )
   const cycles = await RecruitmentCycle.find().sort({ created_at: -1 }).lean()
   return NextResponse.json(cycles.map(c => ({ ...c, id: c._id.toString(), _id: undefined })))
 }

@@ -67,10 +67,30 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     const rawCands: Candidate[] = candidatesRes.ok ? await candidatesRes.json() : []
     const membersData = membersRes.ok ? await membersRes.json() : []
 
-    const cands = rawCands.map((c: Candidate) => ({
+    let cands = rawCands.map((c: Candidate) => ({
       ...c,
       data: typeof c.data === 'string' ? JSON.parse(c.data) : c.data,
     }))
+
+    // Merge grader review scores if this session is linked to a round
+    if (sessionData?.round_id && cands.some(c => c.applicant_id)) {
+      const statsRes = await fetch(`/api/admin/grading-stats?round_id=${sessionData.round_id}`)
+      if (statsRes.ok) {
+        const stats = await statsRes.json()
+        const scoreMap = new Map<string, Record<string, number>>(
+          (stats.applicants ?? []).map((a: { applicant_id: string; total: number; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }) => [
+            a.applicant_id,
+            { score: a.total, r0: a.r0, r1: a.r1, r2: a.r2, r3: a.r3, r4: a.r4, r5: a.r5, r6: a.r6, r7: a.r7, r8: a.r8, r9: a.r9 },
+          ])
+        )
+        cands = cands.map(c => {
+          if (!c.applicant_id) return c
+          const scores = scoreMap.get(c.applicant_id)
+          if (!scores) return c
+          return { ...c, data: { ...c.data, ...scores } }
+        })
+      }
+    }
 
     if (sessionData) setSession(sessionData)
     setCandidates(cands)
@@ -115,6 +135,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         body: JSON.stringify({ id: existing.id }),
       })
     } else {
+      // Remove the opposite vote first (can't vouch and anti-vouch simultaneously)
+      const opposite = voteType === 'vouch' ? 'anti_vouch' : voteType === 'anti_vouch' ? 'vouch' : null
+      if (opposite) {
+        const oppositeVote = votes.find(v => v.candidate_id === candidateId && v.voter_name === voterName && v.vote_type === opposite)
+        if (oppositeVote) {
+          await fetch('/api/votes', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: oppositeVote.id }),
+          })
+        }
+      }
       await fetch('/api/votes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -470,6 +502,11 @@ function CandidateDetail({
       .then(data => setNotes(data))
   }, [candidate.id])
 
+  async function deleteNote(noteId: string) {
+    await fetch(`/api/candidate-notes?id=${noteId}`, { method: 'DELETE' })
+    setNotes(prev => prev.filter(n => n.id !== noteId))
+  }
+
   async function submitNote(type: 'note' | 'red_flag') {
     const content = noteText.trim()
     if (!content) return
@@ -514,7 +551,7 @@ function CandidateDetail({
               if (!cfg) return null
               return (
                 <button key={type} onClick={() => onVote(candidate.id, type)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${active ? cfg.active : cfg.inactive}`}>
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors cursor-pointer ${active ? cfg.active : cfg.inactive}`}>
                   {cfg.label}
                 </button>
               )
@@ -554,7 +591,7 @@ function CandidateDetail({
           <div className="flex gap-2 flex-wrap">
             {(['accepted', 'rejected', 'hold', 'pending'] as const).map(s => (
               <button key={s} onClick={() => onStatusChange(candidate.id, s)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors cursor-pointer ${
                   candidate.status === s ? STATUS_BTN[s].active : STATUS_BTN[s].inactive
                 }`}>
                 {s.charAt(0).toUpperCase() + s.slice(1)}
@@ -581,9 +618,18 @@ function CandidateDetail({
                     <span className="text-red-400 text-xs font-bold tracking-wide">⚑ RED FLAG</span>
                   )}
                   <span className="text-[var(--text-muted)] text-xs">{note.author}</span>
-                  <span className="text-[var(--text-muted)] text-xs ml-auto">
-                    {new Date(note.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  <span className="text-[var(--text-muted)] text-xs">
+                    {new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' })}
                   </span>
+                  {(note.author === myName || isAdmin) && (
+                    <button
+                      onClick={() => deleteNote(note.id)}
+                      className="ml-auto text-[var(--text-muted)] hover:text-red-400 transition-colors text-xs cursor-pointer"
+                      title="Delete note"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
                 <p className={`text-sm leading-snug ${note.type === 'red_flag' ? 'text-red-400' : 'text-[var(--text-secondary)]'}`}>
                   {note.content}
@@ -606,16 +652,16 @@ function CandidateDetail({
               <button
                 onClick={() => submitNote('note')}
                 disabled={submitting || !noteText.trim()}
-                className="flex-1 bg-[var(--bg-raised)] hover:bg-[var(--bg-active)] border border-[var(--border)] text-[var(--text-secondary)] text-sm py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium py-2 rounded-lg transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
               >
                 Add Note
               </button>
               <button
                 onClick={() => submitNote('red_flag')}
                 disabled={submitting || !noteText.trim()}
-                className="flex-1 bg-red-950/30 hover:bg-red-900/40 border border-red-900/50 text-red-400 text-sm py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                className="flex-1 bg-red-600 hover:bg-red-500 text-white text-sm font-medium py-2 rounded-lg transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
               >
-                ⚑ Flag
+                ⚑ Red Flag
               </button>
             </div>
           </div>

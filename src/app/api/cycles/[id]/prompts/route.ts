@@ -13,17 +13,23 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await connectDB()
   const { id } = await params
-  const prompts: { id?: string; question_number: number; prompt: string; description?: string }[] = await req.json()
+  const prompts: { id?: string; question_number: number; prompt: string; description?: string; criterion1?: string; criterion2?: string }[] = await req.json()
 
   const results = []
   for (const p of prompts) {
+    const fields = {
+      prompt: p.prompt,
+      description: p.description ?? null,
+      criterion1: p.criterion1 ?? null,
+      criterion2: p.criterion2 ?? null,
+    }
     if (p.id) {
-      const updated = await EssayPrompt.findByIdAndUpdate(p.id, { prompt: p.prompt, description: p.description ?? null }, { new: true }).lean()
+      const updated = await EssayPrompt.findByIdAndUpdate(p.id, fields, { new: true }).lean()
       if (updated) results.push({ ...updated, id: updated._id.toString(), cycle_id: updated.cycle_id.toString(), _id: undefined })
     } else {
       const created = await EssayPrompt.findOneAndUpdate(
         { cycle_id: id, question_number: p.question_number },
-        { cycle_id: id, question_number: p.question_number, prompt: p.prompt, description: p.description ?? null },
+        { cycle_id: id, question_number: p.question_number, ...fields },
         { upsert: true, new: true }
       ).lean()
       if (created) results.push({ ...created, id: created._id.toString(), cycle_id: created.cycle_id.toString(), _id: undefined })

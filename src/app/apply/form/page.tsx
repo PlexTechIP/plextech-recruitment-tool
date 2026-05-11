@@ -16,7 +16,7 @@ const RACE_OPTIONS = [
 ]
 
 interface EssayPrompt { id: string; question_number: number; prompt: string; description: string | null }
-interface Cycle { id: string; name: string; accepting_applications: boolean; status: string }
+interface Cycle { id: string; name: string; accepting_applications: boolean; status: string; application_deadline: string | null }
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -52,6 +52,7 @@ export default function ApplicationForm() {
   const [raceDropdownOpen, setRaceDropdownOpen] = useState(false)
   const raceRef = useRef<HTMLDivElement>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [alreadyApplied, setAlreadyApplied] = useState(false)
 
   const currentYear = new Date().getFullYear()
 
@@ -79,6 +80,15 @@ export default function ApplicationForm() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  async function checkDuplicate(emailValue: string) {
+    if (!cycle || !emailValue.trim()) return
+    const res = await fetch(`/api/applicants/check-duplicate?cycle_id=${cycle.id}&email=${encodeURIComponent(emailValue.trim())}`)
+    if (res.ok) {
+      const { exists } = await res.json()
+      setAlreadyApplied(exists)
+    }
+  }
 
   function toggleRace(option: string) {
     setRace(prev => prev.includes(option) ? prev.filter(r => r !== option) : [...prev, option])
@@ -108,6 +118,7 @@ export default function ApplicationForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitError('')
+    if (alreadyApplied) { setSubmitError('An application has already been submitted with this email.'); return }
     if (!validate()) { setSubmitError('Please fill out the required fields above.'); return }
     if (!cycle) return
 
@@ -175,6 +186,11 @@ export default function ApplicationForm() {
           <h1>PlexTech Application — {cycle.name}</h1>
           <h4>Thank you for your interest in PlexTech!<br />Please fill out the information below and we will get back to you soon.</h4>
           <p>All applications submitted are final; duplicates will not be accepted.</p>
+          {cycle.application_deadline && (
+            <p style={{ color: '#ec6f34' }}>
+              Applications close on {new Date(cycle.application_deadline).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Los_Angeles' })} PT
+            </p>
+          )}
         </div>
 
         <div className="apply-field">
@@ -191,8 +207,18 @@ export default function ApplicationForm() {
 
         <div className="apply-field">
           <label>Berkeley Email</label>
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} />
+          <input
+            type="email"
+            value={email}
+            onChange={e => { setEmail(e.target.value); setAlreadyApplied(false) }}
+            onBlur={e => checkDuplicate(e.target.value)}
+          />
           {errors.email && <p className="apply-warning">{errors.email}</p>}
+          {alreadyApplied && (
+            <p className="apply-warning">
+              An application has already been submitted with this email for {cycle.name}. If you believe this is an error, please contact plextech@berkeley.edu.
+            </p>
+          )}
         </div>
 
         <div className="apply-field">

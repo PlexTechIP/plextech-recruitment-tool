@@ -14,6 +14,7 @@ const RecruitmentCycleSchema = new Schema({
   name:                   { type: String, required: true },
   status:                 { type: String, enum: ['active', 'ended'], default: 'active' },
   accepting_applications: { type: Boolean, default: false },
+  application_deadline:   { type: Date, default: null },
   created_at:             { type: Date, default: Date.now },
 })
 export const RecruitmentCycle = models.RecruitmentCycle || model('RecruitmentCycle', RecruitmentCycleSchema)
@@ -24,6 +25,8 @@ const EssayPromptSchema = new Schema({
   question_number: { type: Number, required: true },
   prompt:          { type: String, required: true },
   description:     { type: String, default: null },
+  criterion1:      { type: String, default: null },
+  criterion2:      { type: String, default: null },
 })
 EssayPromptSchema.index({ cycle_id: 1, question_number: 1 }, { unique: true })
 export const EssayPrompt = models.EssayPrompt || model('EssayPrompt', EssayPromptSchema)
@@ -59,12 +62,13 @@ export const EssayResponse = models.EssayResponse || model('EssayResponse', Essa
 
 // ─── Rounds ──────────────────────────────────────────────────
 const RoundSchema = new Schema({
-  cycle_id:     { type: Schema.Types.ObjectId, ref: 'RecruitmentCycle', required: true },
-  name:         { type: String, required: true },
-  order_index:  { type: Number, required: true },
-  grading_type: { type: String, enum: ['rubric', 'interview', null], default: null },
-  status:       { type: String, enum: ['pending', 'grading', 'deliberating', 'ended'], default: 'pending' },
-  created_at:   { type: Date, default: Date.now },
+  cycle_id:           { type: Schema.Types.ObjectId, ref: 'RecruitmentCycle', required: true },
+  name:               { type: String, required: true },
+  order_index:        { type: Number, required: true },
+  grading_type:       { type: String, enum: ['rubric', 'interview', null], default: null },
+  status:             { type: String, enum: ['pending', 'grading', 'deliberating', 'ended'], default: 'pending' },
+  interview_form_url: { type: String, default: null },
+  created_at:         { type: Date, default: Date.now },
 })
 export const Round = models.Round || model('Round', RoundSchema)
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 
-interface Cycle { id: string; name: string; status: string; accepting_applications: boolean }
+interface Cycle { id: string; name: string; status: string; accepting_applications: boolean; application_deadline: string | null }
 
 export default function ApplyHome() {
   const router = useRouter()
@@ -29,7 +29,14 @@ export default function ApplyHome() {
         <Image src="/PlexTechLogo.png" alt="PlexTech logo" width={35} height={35} style={{ marginBottom: '0.5rem' }} />
         <h2>Welcome to the PlexTech Application Platform!</h2>
         {loading ? null : accepting ? (
-          <h4>If you are an applicant, please proceed to the application form.</h4>
+          <>
+            <h4>If you are an applicant, please proceed to the application form.</h4>
+            {cycle?.application_deadline && (
+              <p style={{ color: '#ec6f34', fontSize: '0.9rem', marginTop: '0.5rem' }}>
+                Applications close on {new Date(cycle.application_deadline).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Los_Angeles' })} PT
+              </p>
+            )}
+          </>
         ) : (
           <h4 style={{ color: '#ec6f34' }}>
             Applications are closed for {cycle?.name ?? 'this semester'}. Thank you for your interest in PlexTech!

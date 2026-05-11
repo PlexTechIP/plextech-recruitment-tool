@@ -5,36 +5,12 @@ import { useRouter } from 'next/navigation'
 import { getCurrentUser, CurrentUser } from '@/lib/auth'
 import { Applicant, EssayPrompt, Round } from '@/lib/types'
 
-// Rubric sections tied to r-values and scoring.ts weights
-// Essay index 0 → r4, r5, comment1
-// Essay index 1 → r8, r9, comment2
-// Essay index 2 → r6, r7, comment3
-const ESSAY_RUBRIC = [
-  {
-    label: 'Question 1',
-    commentKey: 'comment1',
-    ratings: [
-      { key: 'r4', question: 'To what degree does the applicant demonstrate passion for the club specifically?' },
-      { key: 'r5', question: 'To what extent does the applicant exhibit knowledge about the club (culture, people, projects, etc.)?' },
-    ],
-  },
-  {
-    label: 'Question 2',
-    commentKey: 'comment2',
-    ratings: [
-      { key: 'r8', question: 'To what degree does the applicant demonstrate leadership skills in their community?' },
-      { key: 'r9', question: 'How well does the applicant show commitment to their community?' },
-    ],
-  },
-  {
-    label: 'Question 3',
-    commentKey: 'comment3',
-    ratings: [
-      { key: 'r6', question: 'To what degree does the applicant demonstrate creativity in their solution?' },
-      { key: 'r7', question: 'To what extent does their response demonstrate an eagerness to learn or explore?' },
-    ],
-  },
-]
+// r-keys tied to each essay question (index 0→Q1, 1→Q2, 2→Q3)
+const ESSAY_RATING_KEYS = [
+  { commentKey: 'comment1', rKeys: ['r4', 'r5'] },
+  { commentKey: 'comment2', rKeys: ['r8', 'r9'] },
+  { commentKey: 'comment3', rKeys: ['r6', 'r7'] },
+] as const
 
 type RKey = 'r0' | 'r1' | 'r2' | 'r3' | 'r4' | 'r5' | 'r6' | 'r7' | 'r8' | 'r9'
 type CKey = 'comment0' | 'comment1' | 'comment2' | 'comment3' | 'comment4'
@@ -300,34 +276,56 @@ export default function GradePage() {
             <div className="space-y-3">
               {roundSummaries.map(({ round, total, completed }) => {
                 const pending = total - completed
+                const isInterview = round.grading_type === 'interview'
                 return (
-                  <button
-                    key={round.id}
-                    onClick={() => setSelectedRoundId(round.id)}
-                    disabled={pending === 0}
-                    className="w-full text-left bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5 hover:bg-[var(--bg-raised)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-[var(--text-primary)]">{round.name}</p>
-                        <p className="text-sm text-[var(--text-muted)] mt-0.5">
-                          {pending > 0 ? `${pending} applicant${pending !== 1 ? 's' : ''} remaining` : 'All done!'}
-                        </p>
+                  <div key={round.id} className="space-y-2">
+                    {isInterview && round.interview_form_url ? (
+                      <div className="bg-[var(--bg-surface)] border border-[#ff8a00]/40 rounded-xl p-5 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-[var(--text-primary)]">{round.name}</p>
+                            <p className="text-sm text-[var(--text-muted)] mt-0.5">Interview round — fill out the form below while interviewing</p>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 rounded-full border bg-[#ff8a00]/15 text-[#ff8a00] border-[#ff8a00]/30 font-medium">interview</span>
+                        </div>
+                        <a
+                          href={round.interview_form_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center gap-2 w-full py-3 rounded-lg bg-[#ff8a00] text-white font-semibold hover:opacity-90 transition-opacity"
+                        >
+                          Open Interview Form ↗
+                        </a>
                       </div>
-                      <div className="text-right">
-                        <p className="text-2xl font-bold text-[#ff8a00]">{completed}/{total}</p>
-                        <p className="text-xs text-[var(--text-muted)]">completed</p>
-                      </div>
-                    </div>
-                    {total > 0 && (
-                      <div className="mt-3 h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-[#ff8a00] rounded-full transition-all"
-                          style={{ width: `${Math.round((completed / total) * 100)}%` }}
-                        />
-                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setSelectedRoundId(round.id)}
+                        disabled={pending === 0}
+                        className="w-full text-left bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5 hover:bg-[var(--bg-raised)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-[var(--text-primary)]">{round.name}</p>
+                            <p className="text-sm text-[var(--text-muted)] mt-0.5">
+                              {pending > 0 ? `${pending} applicant${pending !== 1 ? 's' : ''} remaining` : 'All done!'}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-[#ff8a00]">{completed}/{total}</p>
+                            <p className="text-xs text-[var(--text-muted)]">completed</p>
+                          </div>
+                        </div>
+                        {total > 0 && (
+                          <div className="mt-3 h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-[#ff8a00] rounded-full transition-all"
+                              style={{ width: `${Math.round((completed / total) * 100)}%` }}
+                            />
+                          </div>
+                        )}
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -375,9 +373,9 @@ export default function GradePage() {
           <h1 className="text-xl font-bold text-[var(--text-primary)]">PlexTech Grader Portal</h1>
           <button
             className="text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
-            onClick={() => { setSelectedRoundId(null); loadRoundSummaries(user.email) }}
+            onClick={() => router.push('/dashboard')}
           >
-            ← Rounds
+            ← Dashboard
           </button>
         </div>
 
@@ -417,25 +415,26 @@ export default function GradePage() {
           {!essayConfirmed && (
             <>
               {applicant.essays.slice(0, 3).map((e, i) => {
-                const rubric = ESSAY_RUBRIC[i]
-                if (!rubric) return null
+                const keys = ESSAY_RATING_KEYS[i]
+                if (!keys) return null
+                const criteria = [e.prompt.criterion1, e.prompt.criterion2]
                 return (
-                  <Section key={e.prompt.id} label={rubric.label}>
+                  <Section key={e.prompt.id} label={`Question ${i + 1}`}>
                     <p className="text-sm font-medium text-[#ff8a00] mb-1">{e.prompt.prompt}</p>
                     <div className="bg-[var(--bg-raised)] rounded-lg p-3 mb-4 text-sm text-[var(--text-secondary)] whitespace-pre-wrap">
                       {e.response || <span className="text-[var(--text-muted)] italic">No response</span>}
                     </div>
                     <CommentField
                       label="Comment"
-                      value={comments[rubric.commentKey as CKey]}
-                      onChange={v => setComment(rubric.commentKey as CKey, v)}
+                      value={comments[keys.commentKey as CKey]}
+                      onChange={v => setComment(keys.commentKey as CKey, v)}
                     />
-                    {rubric.ratings.map(r => (
+                    {keys.rKeys.map((rKey, ci) => (
                       <RatingSelect
-                        key={r.key}
-                        question={r.question}
-                        value={ratings[r.key as RKey]}
-                        onChange={v => setRating(r.key as RKey, v)}
+                        key={rKey}
+                        question={criteria[ci] ?? `Criterion ${ci + 1}`}
+                        value={ratings[rKey as RKey]}
+                        onChange={v => setRating(rKey as RKey, v)}
                         options={[1, 2, 3, 4]}
                       />
                     ))}
@@ -467,11 +466,12 @@ export default function GradePage() {
 
               {/* Confirm essay reviews */}
               {(() => {
-                const emptyComments = ESSAY_RUBRIC.map((r) => ({
-                  label: r.label,
+                const activeEssayKeys = ESSAY_RATING_KEYS.slice(0, applicant.essays.slice(0, 3).length)
+                const emptyComments = activeEssayKeys.map((r, i) => ({
+                  label: `Question ${i + 1}`,
                   empty: !comments[r.commentKey as CKey].trim(),
                 })).concat([{ label: 'Time Commitments', empty: !comments.comment4.trim() }]).filter(c => c.empty)
-                const essayRatingKeys: RKey[] = ['r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r0']
+                const essayRatingKeys: RKey[] = [...activeEssayKeys.flatMap(k => [...k.rKeys] as RKey[]), 'r0']
                 const emptyRatings = essayRatingKeys.filter(k => !ratings[k])
                 const canConfirm = emptyComments.length === 0 && emptyRatings.length === 0
                 return (

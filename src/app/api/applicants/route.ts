@@ -7,6 +7,15 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { essays, ...applicantData } = body
 
+  const existing = await Applicant.findOne({
+    cycle_id: applicantData.cycle_id,
+    email: applicantData.email?.trim().toLowerCase(),
+  })
+  if (existing) {
+    return NextResponse.json({ error: 'An application with this email already exists for this cycle.' }, { status: 409 })
+  }
+
+  applicantData.email = applicantData.email?.trim().toLowerCase()
   const applicant = await Applicant.create(applicantData)
   const applicantId = applicant._id.toString()
 

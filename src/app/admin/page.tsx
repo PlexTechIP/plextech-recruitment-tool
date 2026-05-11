@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
 import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus, GradingType } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
+import Papa from 'papaparse'
 
 // ─── tiny shared UI ──────────────────────────────────────────
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -42,9 +43,9 @@ export default function AdminPage() {
 
   // Essay prompts
   const [prompts, setPrompts] = useState<EssayPrompt[]>([
-    { id: '', cycle_id: '', question_number: 1, prompt: '', description: null },
-    { id: '', cycle_id: '', question_number: 2, prompt: '', description: null },
-    { id: '', cycle_id: '', question_number: 3, prompt: '', description: null },
+    { id: '', cycle_id: '', question_number: 1, prompt: '', description: null, criterion1: null, criterion2: null },
+    { id: '', cycle_id: '', question_number: 2, prompt: '', description: null, criterion1: null, criterion2: null },
+    { id: '', cycle_id: '', question_number: 3, prompt: '', description: null, criterion1: null, criterion2: null },
   ])
   const [promptSaving, setPromptSaving] = useState(false)
   const [promptMessage, setPromptMessage] = useState('')
@@ -52,6 +53,7 @@ export default function AdminPage() {
   // Rounds
   const [rounds, setRounds] = useState<Round[]>([])
   const [selectedRound, setSelectedRound] = useState<Round | null>(null)
+  const roundDetailRef = useRef<HTMLDivElement>(null)
   const [newRoundName, setNewRoundName] = useState('')
   const [newRoundType, setNewRoundType] = useState<GradingType | ''>('rubric')
   const [roundError, setRoundError] = useState('')
@@ -66,6 +68,31 @@ export default function AdminPage() {
   // Start deliberation
   const [delibLoading, setDelibLoading] = useState(false)
   const [delibMessage, setDelibMessage] = useState('')
+
+  // Deadline
+  const [deadlineInput, setDeadlineInput] = useState<string>('')
+  const [deadlineSaving, setDeadlineSaving] = useState(false)
+  const [startGradingLoading, setStartGradingLoading] = useState(false)
+  const [startGradingMessage, setStartGradingMessage] = useState('')
+
+  // Grading progress (for rubric rounds)
+  const [gradingProgress, setGradingProgress] = useState<{ totalAssignments: number; completedReviews: number; graders: { email: string; assigned: number; completed: number }[] } | null>(null)
+
+  // Interview form URL
+  const [interviewFormUrl, setInterviewFormUrl] = useState<string>('')
+  const [formUrlSaving, setFormUrlSaving] = useState(false)
+
+  // Track previous cycle ID so we only reset deadline input when switching cycles
+  const prevCycleIdRef = useRef<string | null>(null)
+
+  // Interview CSV import
+  const interviewFileRef = useRef<HTMLInputElement>(null)
+  const [interviewCsvText, setInterviewCsvText] = useState<string>('')
+  const [interviewColumns, setInterviewColumns] = useState<string[]>([])
+  const [nameColumn, setNameColumn] = useState<string>('')
+  const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; avg: number }[] | null>(null)
+  const [interviewImporting, setInterviewImporting] = useState(false)
+  const [interviewMessage, setInterviewMessage] = useState('')
 
   // ── auth ─────────────────────────────────────────────────
   useEffect(() => {
@@ -135,7 +162,7 @@ export default function AdminPage() {
     const existing: EssayPrompt[] = await fetch(`/api/cycles/${cycleId}/prompts`).then(r => r.json())
     const filled = [1, 2, 3].map(n => {
       const found = existing.find(p => p.question_number === n)
-      return found ?? { id: '', cycle_id: cycleId, question_number: n, prompt: '', description: null }
+      return found ?? { id: '', cycle_id: cycleId, question_number: n, prompt: '', description: null, criterion1: null, criterion2: null }
     })
     setPrompts(filled)
   }, [])
@@ -149,8 +176,45 @@ export default function AdminPage() {
       setDelibMessage('')
       setAssignMessage('')
       setPromptMessage('')
+      setInterviewMessage('')
+      setInterviewPreview(null)
+      setInterviewCsvText('')
     }
   }, [selectedCycle, loadPrompts])
+
+  // Only reset deadline input when switching to a different cycle
+  useEffect(() => {
+    if (selectedCycle?.id === prevCycleIdRef.current) return
+    prevCycleIdRef.current = selectedCycle?.id ?? null
+    setDeadlineInput(selectedCycle?.application_deadline
+      ? new Date(selectedCycle.application_deadline).toISOString().slice(0, 16)
+      : '')
+  }, [selectedCycle])
+
+  // Load grading progress or interview form URL when round changes
+  useEffect(() => {
+    setGradingProgress(null)
+    setInterviewFormUrl('')
+    setInterviewPreview(null)
+    setInterviewCsvText('')
+    setInterviewMessage('')
+    if (!selectedRound) return
+    if (selectedRound.grading_type === 'rubric') {
+      fetch(`/api/admin/grading-stats?round_id=${selectedRound.id}`)
+        .then(r => r.json())
+        .then(data => {
+          const graders: { email: string; assigned: number; completed: number }[] = data.graders ?? []
+          setGradingProgress({
+            totalAssignments: graders.reduce((s, g) => s + g.assigned, 0),
+            completedReviews: graders.reduce((s, g) => s + g.completed, 0),
+            graders,
+          })
+        })
+    }
+    if (selectedRound.grading_type === 'interview') {
+      setInterviewFormUrl(selectedRound.interview_form_url ?? '')
+    }
+  }, [selectedRound])
 
   async function savePrompts() {
     if (!selectedCycle) return
@@ -165,6 +229,8 @@ export default function AdminPage() {
         question_number: p.question_number,
         prompt: p.prompt,
         description: p.description,
+        criterion1: p.criterion1,
+        criterion2: p.criterion2,
       }))),
     })
     await loadPrompts(selectedCycle.id)
@@ -273,6 +339,198 @@ export default function AdminPage() {
     setAssignLoading(false)
   }
 
+  // ── deadline ─────────────────────────────────────────────
+  async function saveDeadline() {
+    if (!selectedCycle) return
+    setDeadlineSaving(true)
+    const deadline = deadlineInput ? new Date(deadlineInput).toISOString() : null
+    await fetch(`/api/cycles/${selectedCycle.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ application_deadline: deadline }),
+    })
+    // Update local state directly without going through the selectedCycle useEffect
+    const updatedCycle = { ...selectedCycle, application_deadline: deadline }
+    setCycles(prev => prev.map(c => c.id === selectedCycle.id ? updatedCycle : c))
+    setSelectedCycle(updatedCycle)
+    setDeadlineSaving(false)
+  }
+
+  // ── start grading ─────────────────────────────────────────
+  async function startGrading() {
+    if (!selectedCycle) return
+    setStartGradingLoading(true)
+    setStartGradingMessage('')
+
+    // Create a rubric round
+    const roundRes = await fetch('/api/rounds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cycle_id: selectedCycle.id,
+        name: 'Application Review',
+        grading_type: 'rubric',
+        order_index: 1,
+        status: 'pending',
+      }),
+    })
+    if (!roundRes.ok) {
+      setStartGradingMessage('Failed to create round.')
+      setStartGradingLoading(false)
+      return
+    }
+    const newRound: Round = await roundRes.json()
+    await loadRounds(selectedCycle.id)
+    setSelectedRound(newRound)
+
+    // Assign graders
+    const [allUsers, appsData] = await Promise.all([
+      fetch('/api/authorized-users').then(r => r.json()) as Promise<{ email: string; role: string }[]>,
+      fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json()) as Promise<{ id: string }[]>,
+    ])
+
+    const members = allUsers.filter(u => u.role === 'grader').map(u => u.email)
+    const leadership = allUsers.filter(u => u.role === 'leadership').map(u => u.email)
+    const applicants = (appsData ?? []).map(a => a.id)
+
+    if (applicants.length === 0) { setStartGradingMessage('Round created, but no applicants found to assign.'); setStartGradingLoading(false); return }
+    if (members.length + leadership.length === 0) { setStartGradingMessage('Round created, but no graders found.'); setStartGradingLoading(false); return }
+
+    const MEMBER_REDUNDANCY = 2
+    const LEADER_REDUNDANCY = 2
+    const rows: { round_id: string; applicant_id: string; grader_email: string }[] = []
+    let mp = 0, lp = 0
+    for (const appId of applicants) {
+      const assigned = new Set<string>()
+      for (let i = 0; i < MEMBER_REDUNDANCY && members.length > 0; i++) { assigned.add(members[mp % members.length]); mp++ }
+      for (let i = 0; i < LEADER_REDUNDANCY && leadership.length > 0; i++) { assigned.add(leadership[lp % leadership.length]); lp++ }
+      for (const email of assigned) rows.push({ round_id: newRound.id, applicant_id: appId, grader_email: email })
+    }
+
+    await fetch('/api/grader-assignments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rows),
+    })
+    await fetch(`/api/rounds/${newRound.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'grading' }),
+    })
+    await loadRounds(selectedCycle.id)
+    setStartGradingMessage(`Grading started — ${applicants.length} applicants assigned across ${members.length + leadership.length} graders.`)
+    setStartGradingLoading(false)
+  }
+
+  // ── interview form URL ─────────────────────────────────────
+  async function saveInterviewFormUrl() {
+    if (!selectedRound) return
+    setFormUrlSaving(true)
+    const res = await fetch(`/api/rounds/${selectedRound.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interview_form_url: interviewFormUrl || null }),
+    })
+    const updated = await res.json()
+    setRounds(prev => prev.map(r => r.id === updated.id ? updated : r))
+    setSelectedRound(updated)
+    setFormUrlSaving(false)
+  }
+
+  // ── interview CSV import ──────────────────────────────────
+  function parseInterviewCsv(text: string) {
+    const result = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true, dynamicTyping: false })
+    const rows = result.data
+    if (!rows.length) return
+    const cols = Object.keys(rows[0])
+    setInterviewColumns(cols)
+    setNameColumn(cols.find(c => /name/i.test(c)) ?? cols[0])
+    setInterviewPreview(null)
+  }
+
+  function buildInterviewPreview() {
+    if (!interviewCsvText || !nameColumn) return
+    const result = Papa.parse<Record<string, string>>(interviewCsvText, { header: true, skipEmptyLines: true, dynamicTyping: false })
+    const rows = result.data
+
+    // Group by candidate name, average numeric columns (excluding name + timestamp + email)
+    const skipCols = new Set([nameColumn, 'Timestamp', 'Email Address', 'Email', 'email'])
+    const grouped = new Map<string, Record<string, number[]>>()
+
+    for (const row of rows) {
+      const name = (row[nameColumn] ?? '').trim()
+      if (!name) continue
+      if (!grouped.has(name)) grouped.set(name, {})
+      const entry = grouped.get(name)!
+      for (const [col, val] of Object.entries(row)) {
+        if (skipCols.has(col)) continue
+        const n = parseFloat(val)
+        if (isNaN(n)) continue
+        if (!entry[col]) entry[col] = []
+        entry[col].push(n)
+      }
+    }
+
+    const preview = [...grouped.entries()].map(([name, scores]) => {
+      const avgScores: Record<string, number> = {}
+      let total = 0, count = 0
+      for (const [col, vals] of Object.entries(scores)) {
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length
+        avgScores[col] = Math.round(avg * 100) / 100
+        total += avg
+        count++
+      }
+      return { name, scores: avgScores, avg: count > 0 ? Math.round((total / count) * 100) / 100 : 0 }
+    }).sort((a, b) => b.avg - a.avg)
+
+    setInterviewPreview(preview)
+  }
+
+  async function importInterviewResponses() {
+    if (!interviewPreview || !selectedCycle || !currentUser || !selectedRound) return
+    setInterviewImporting(true)
+    setInterviewMessage('')
+    try {
+      const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
+      const sessionRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: sessionId,
+          round_id: selectedRound.id,
+          name: `${selectedCycle.name} — ${selectedRound.name} Deliberation`,
+          status: 'active',
+          created_by: currentUser.email,
+          anonymous: false,
+        }),
+      })
+      if (!sessionRes.ok) throw new Error('Failed to create session.')
+      await fetch('/api/session-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
+      })
+      const candidates = interviewPreview.map((c, idx) => ({
+        session_id: sessionId,
+        name: c.name,
+        status: 'pending',
+        data: { score: c.avg, candidate_number: idx + 1, ...c.scores },
+      }))
+      await fetch(`/api/sessions/${sessionId}/candidates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(candidates),
+      })
+      await updateRoundStatus(selectedRound, 'deliberating')
+      setInterviewMessage(`Session created! ID: ${sessionId}`)
+      setTimeout(() => router.push(`/session/${sessionId}`), 1500)
+    } catch (err: unknown) {
+      setInterviewMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`)
+    } finally {
+      setInterviewImporting(false)
+    }
+  }
+
   // ── analytics ────────────────────────────────────────────
   async function loadAnalytics(cycleId: string) {
     const data: Applicant[] = await fetch(`/api/cycles/${cycleId}/applicants`).then(r => r.json())
@@ -376,12 +634,17 @@ export default function AdminPage() {
     <main className="min-h-screen bg-[var(--bg-base)] flex flex-col">
       {/* Header */}
       <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => router.push('/dashboard')} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+        <div className="flex items-center gap-1">
+          <button onClick={() => router.push('/dashboard')} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors px-3 py-1.5 rounded-lg">
             ← Dashboard
           </button>
-          <span className="text-[var(--border)]">|</span>
-          <h1 className="font-bold text-[var(--text-primary)]">Admin Console</h1>
+          <span className="text-[var(--border)] px-1">|</span>
+          <button className="text-xs font-semibold text-[var(--text-primary)] bg-[var(--bg-active)] px-3 py-1.5 rounded-lg">
+            Admin Console
+          </button>
+          <button onClick={() => router.push('/admin/grading')} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors px-3 py-1.5 rounded-lg">
+            Grading Console
+          </button>
         </div>
         <span className="text-xs text-[var(--text-muted)]">{currentUser?.email}</span>
       </header>
@@ -444,30 +707,96 @@ export default function AdminPage() {
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
             {/* Cycle header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-[var(--text-primary)]">{selectedCycle.name}</h2>
-                <p className="text-sm text-[var(--text-muted)]">{selectedCycle.status}</p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => toggleAccepting(selectedCycle)}
-                  className={`text-sm px-4 py-2 rounded-lg border font-medium transition-colors ${
-                    selectedCycle.accepting_applications
-                      ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 hover:bg-blue-500/25'
-                      : 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  {selectedCycle.accepting_applications ? 'Close Applications' : 'Open Applications'}
-                </button>
-                {selectedCycle.status === 'active' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-[var(--text-primary)]">{selectedCycle.name}</h2>
+                  <p className="text-sm text-[var(--text-muted)]">{selectedCycle.status}</p>
+                </div>
+                <div className="flex gap-2">
                   <button
-                    onClick={() => endCycle(selectedCycle)}
-                    className="text-sm px-4 py-2 rounded-lg border bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20 font-medium transition-colors"
+                    onClick={() => toggleAccepting(selectedCycle)}
+                    className={`text-sm px-4 py-2 rounded-lg border font-medium transition-colors cursor-pointer ${
+                      selectedCycle.accepting_applications
+                        ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 hover:bg-blue-500/25'
+                        : 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'
+                    }`}
                   >
-                    End Cycle
+                    {selectedCycle.accepting_applications ? 'Close Applications' : 'Open Applications'}
                   </button>
-                )}
+                  {selectedCycle.status === 'active' && (
+                    <button
+                      onClick={() => endCycle(selectedCycle)}
+                      className="text-sm px-4 py-2 rounded-lg border bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20 font-medium transition-colors cursor-pointer"
+                    >
+                      End Cycle
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Application deadline */}
+              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-4 space-y-2">
+                <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">Application Deadline</p>
+                {(() => {
+                  const dl = selectedCycle.application_deadline ? new Date(selectedCycle.application_deadline) : null
+                  const passed = dl && dl <= new Date()
+                  return (
+                    <>
+                      {dl && (
+                        <p className={`text-sm font-medium ${passed ? 'text-amber-400' : 'text-green-400'}`}>
+                          {passed ? '⏰ Deadline passed — ' : '🕐 Closes '}{dl.toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Los_Angeles' })} PT
+                        </p>
+                      )}
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="datetime-local"
+                          value={deadlineInput}
+                          onChange={e => setDeadlineInput(e.target.value)}
+                          className="bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
+                        />
+                        <button
+                          onClick={saveDeadline}
+                          disabled={deadlineSaving}
+                          className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded-lg cursor-pointer"
+                        >
+                          {deadlineSaving ? 'Saving...' : 'Set Deadline'}
+                        </button>
+                        {deadlineInput && (
+                          <button
+                            onClick={() => { setDeadlineInput(''); saveDeadline() }}
+                            className="text-xs text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      {passed && !rounds.some(r => r.grading_type === 'rubric') && (
+                        <div className="pt-2 space-y-2">
+                          <button
+                            onClick={startGrading}
+                            disabled={startGradingLoading}
+                            className="plex-gradient disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg cursor-pointer"
+                          >
+                            {startGradingLoading ? 'Starting...' : '▶ Start Grading'}
+                          </button>
+                          {startGradingMessage && <p className="text-sm text-green-400">{startGradingMessage}</p>}
+                        </div>
+                      )}
+                      {passed && rounds.some(r => r.grading_type === 'rubric') && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <span className="text-xs text-green-400 font-medium">✓ Grading round active</span>
+                          <button
+                            onClick={() => router.push('/admin/grading')}
+                            className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text-primary)] cursor-pointer"
+                          >
+                            View Grading Console →
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             </div>
 
@@ -498,7 +827,7 @@ export default function AdminPage() {
             <Section title="Essay Prompts">
               <div className="space-y-4">
                 {prompts.map((p, i) => (
-                  <div key={i} className="space-y-1.5">
+                  <div key={i} className="space-y-1.5 pb-3 border-b border-[var(--border)] last:border-0">
                     <p className="text-xs font-medium text-[var(--text-muted)]">Question {p.question_number}</p>
                     <input
                       type="text"
@@ -512,6 +841,20 @@ export default function AdminPage() {
                       value={p.description ?? ''}
                       onChange={e => setPrompts(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
                       placeholder="Description / clarification (optional)..."
+                      className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
+                    />
+                    <input
+                      type="text"
+                      value={p.criterion1 ?? ''}
+                      onChange={e => setPrompts(prev => prev.map((x, j) => j === i ? { ...x, criterion1: e.target.value } : x))}
+                      placeholder="Grading criterion 1 (e.g. To what degree does the applicant demonstrate passion?)"
+                      className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
+                    />
+                    <input
+                      type="text"
+                      value={p.criterion2 ?? ''}
+                      onChange={e => setPrompts(prev => prev.map((x, j) => j === i ? { ...x, criterion2: e.target.value } : x))}
+                      placeholder="Grading criterion 2 (e.g. To what extent does the applicant exhibit knowledge?)"
                       className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
                     />
                   </div>
@@ -539,7 +882,7 @@ export default function AdminPage() {
                       : 'bg-[var(--bg-raised)] border-[var(--border)]'
                   }`}>
                     <button
-                      onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage('') }}
+                      onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
                       className="flex-1 text-left px-4 py-3"
                     >
                       <div className="flex items-center justify-between">
@@ -597,16 +940,18 @@ export default function AdminPage() {
             </Section>
 
             {/* Round detail */}
+            <div ref={roundDetailRef} />
             {selectedRound && (
               <Section title={`Round: ${selectedRound.name}`}>
+                {/* Status controls */}
                 <div className="flex gap-2 flex-wrap">
                   {(['pending', 'grading', 'deliberating', 'ended'] as RoundStatus[]).map(s => (
                     <button
                       key={s}
                       onClick={() => updateRoundStatus(selectedRound, s)}
-                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors cursor-pointer ${
                         selectedRound.status === s
-                          ? STATUS_COLOR[s].replace('bg-', 'bg-').replace('/15', '/30')
+                          ? STATUS_COLOR[s].replace('/15', '/30')
                           : 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'
                       }`}
                     >
@@ -615,45 +960,251 @@ export default function AdminPage() {
                   ))}
                 </div>
 
-                {/* Grader assignment */}
-                {selectedRound.grading_type && (
-                  <div className="pt-3 border-t border-[var(--border)] space-y-2">
-                    <p className="text-sm font-medium text-[var(--text-primary)]">Grader Assignment</p>
-                    <p className="text-xs text-[var(--text-muted)]">
-                      Assigns applicants to graders using round-robin. 2 members + 2 leadership per applicant.
-                    </p>
-                    <button
-                      onClick={assignGraders}
-                      disabled={assignLoading || selectedRound.status !== 'pending'}
-                      className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg"
-                    >
-                      {assignLoading ? 'Assigning...' : 'Assign Graders'}
-                    </button>
-                    {assignMessage && <p className="text-sm text-green-400">{assignMessage}</p>}
-                  </div>
+                {/* ── RUBRIC round ── */}
+                {selectedRound.grading_type === 'rubric' && (
+                  <>
+                    {/* Grader assignment */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Grader Assignment</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Assigns all applicants to graders using round-robin (2 graders + 2 leadership per applicant). Run this once when the application deadline has passed.
+                      </p>
+                      <div className="flex gap-2 items-center">
+                        <button
+                          onClick={assignGraders}
+                          disabled={assignLoading || selectedRound.status !== 'pending'}
+                          className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer"
+                        >
+                          {assignLoading ? 'Assigning...' : 'Assign Graders'}
+                        </button>
+                        <button
+                          onClick={() => router.push('/admin/grading')}
+                          className="text-sm px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                        >
+                          View Grading Console →
+                        </button>
+                      </div>
+                      {assignMessage && <p className="text-sm text-green-400">{assignMessage}</p>}
+                    </div>
+
+                    {/* Grading progress */}
+                    {gradingProgress && (
+                      <div className="pt-3 border-t border-[var(--border)] space-y-3">
+                        <p className="text-sm font-medium text-[var(--text-primary)]">Grading Progress</p>
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2 bg-[var(--border)] rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-[#FF6B35] rounded-full transition-all"
+                              style={{ width: `${gradingProgress.totalAssignments > 0 ? Math.round((gradingProgress.completedReviews / gradingProgress.totalAssignments) * 100) : 0}%` }}
+                            />
+                          </div>
+                          <span className="text-sm font-mono text-[var(--text-primary)] shrink-0">
+                            {gradingProgress.completedReviews}/{gradingProgress.totalAssignments} reviews
+                          </span>
+                        </div>
+                        {gradingProgress.graders.length > 0 && (
+                          <div className="space-y-1.5">
+                            {gradingProgress.graders.map(g => (
+                              <div key={g.email} className="flex items-center gap-2 text-xs">
+                                <span className="text-[var(--text-muted)] w-48 truncate">{g.email}</span>
+                                <div className="flex-1 h-1 bg-[var(--border)] rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${g.completed === g.assigned ? 'bg-green-500' : 'bg-[#FF6B35]'}`}
+                                    style={{ width: `${g.assigned > 0 ? Math.round((g.completed / g.assigned) * 100) : 0}%` }}
+                                  />
+                                </div>
+                                <span className={`font-mono shrink-0 ${g.completed === g.assigned ? 'text-green-500' : 'text-[var(--text-muted)]'}`}>
+                                  {g.completed}/{g.assigned}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {gradingProgress.totalAssignments > 0 && gradingProgress.completedReviews < gradingProgress.totalAssignments && (
+                          <p className="text-xs text-amber-400">
+                            {gradingProgress.totalAssignments - gradingProgress.completedReviews} reviews still pending
+                          </p>
+                        )}
+                        {gradingProgress.completedReviews === gradingProgress.totalAssignments && gradingProgress.totalAssignments > 0 && (
+                          <p className="text-xs text-green-400">✓ All grading complete — ready to start deliberation</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Start deliberation */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Start Deliberation</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Computes normalized scores from all reviews and creates a ranked delib session.
+                      </p>
+                      <button
+                        onClick={startDeliberation}
+                        disabled={delibLoading}
+                        className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer"
+                      >
+                        {delibLoading ? 'Creating session...' : 'Start Deliberation'}
+                      </button>
+                      {delibMessage && (
+                        <p className={`text-sm ${delibMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                          {delibMessage}
+                        </p>
+                      )}
+                    </div>
+                  </>
                 )}
 
-                {/* Start deliberation */}
-                <div className="pt-3 border-t border-[var(--border)] space-y-2">
-                  <p className="text-sm font-medium text-[var(--text-primary)]">Start Deliberation</p>
-                  <p className="text-xs text-[var(--text-muted)]">
-                    {selectedRound.grading_type
-                      ? 'Computes normalized scores from all reviews and creates a delib session with ranked candidates.'
-                      : 'Creates a delib session for this round directly (no grading phase).'}
-                  </p>
-                  <button
-                    onClick={startDeliberation}
-                    disabled={delibLoading}
-                    className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg"
-                  >
-                    {delibLoading ? 'Creating session...' : 'Start Deliberation'}
-                  </button>
-                  {delibMessage && (
-                    <p className={`text-sm ${delibMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
-                      {delibMessage}
-                    </p>
-                  )}
-                </div>
+                {/* ── INTERVIEW round ── */}
+                {selectedRound.grading_type === 'interview' && (
+                  <>
+                    {/* Google Form URL */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Interview Form</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Link to the Google Form graders fill out during interviews. Graders will see this link on their grading page.
+                      </p>
+                      <div className="flex gap-2">
+                        <input
+                          type="url"
+                          value={interviewFormUrl}
+                          onChange={e => setInterviewFormUrl(e.target.value)}
+                          placeholder="https://docs.google.com/forms/..."
+                          className="flex-1 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
+                        />
+                        <button
+                          onClick={saveInterviewFormUrl}
+                          disabled={formUrlSaving}
+                          className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer shrink-0"
+                        >
+                          {formUrlSaving ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                      {selectedRound.interview_form_url && (
+                        <a
+                          href={selectedRound.interview_form_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-400 hover:text-blue-300 underline"
+                        >
+                          Open form ↗
+                        </a>
+                      )}
+                    </div>
+
+                    {/* Import responses */}
+                    <div className="pt-3 border-t border-[var(--border)] space-y-3">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Import Interview Responses</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Export your Google Form responses as CSV, then paste or upload here. Responses are grouped by candidate name and averaged across multiple graders.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => interviewFileRef.current?.click()}
+                          className="text-sm px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                        >
+                          Upload CSV
+                        </button>
+                        <input
+                          ref={interviewFileRef}
+                          type="file"
+                          accept=".csv"
+                          className="hidden"
+                          onChange={async e => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            const text = await file.text()
+                            setInterviewCsvText(text)
+                            parseInterviewCsv(text)
+                            if (interviewFileRef.current) interviewFileRef.current.value = ''
+                          }}
+                        />
+                      </div>
+                      <textarea
+                        value={interviewCsvText}
+                        onChange={e => { setInterviewCsvText(e.target.value); parseInterviewCsv(e.target.value) }}
+                        placeholder="Or paste CSV here..."
+                        rows={4}
+                        className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35] resize-none"
+                      />
+
+                      {interviewColumns.length > 0 && (
+                        <div className="flex gap-2 items-center">
+                          <label className="text-xs text-[var(--text-muted)] shrink-0">Candidate name column:</label>
+                          <select
+                            value={nameColumn}
+                            onChange={e => setNameColumn(e.target.value)}
+                            className="bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
+                          >
+                            {interviewColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                          <button
+                            onClick={buildInterviewPreview}
+                            className="plex-gradient text-white text-sm font-medium px-3 py-1.5 rounded-lg cursor-pointer"
+                          >
+                            Preview
+                          </button>
+                        </div>
+                      )}
+
+                      {interviewPreview && (
+                        <div className="space-y-2">
+                          <p className="text-xs text-[var(--text-muted)]">{interviewPreview.length} candidates parsed — scores averaged across all graders</p>
+                          <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--border)]">
+                            <table className="w-full text-xs">
+                              <thead className="bg-[var(--bg-raised)] sticky top-0">
+                                <tr>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">#</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Candidate</th>
+                                  <th className="text-right px-3 py-2 text-[var(--text-muted)] font-medium">Avg Score</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--border)]">
+                                {interviewPreview.map((c, i) => (
+                                  <tr key={c.name} className="hover:bg-[var(--bg-raised)]">
+                                    <td className="px-3 py-1.5 text-[var(--text-muted)]">{i + 1}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-primary)]">{c.name}</td>
+                                    <td className="px-3 py-1.5 text-right font-mono text-[#FF6B35]">{c.avg}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <button
+                            onClick={importInterviewResponses}
+                            disabled={interviewImporting}
+                            className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer"
+                          >
+                            {interviewImporting ? 'Creating session...' : 'Create Deliberation Session'}
+                          </button>
+                          {interviewMessage && (
+                            <p className={`text-sm ${interviewMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                              {interviewMessage}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* ── Delib-only round ── */}
+                {!selectedRound.grading_type && (
+                  <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Start Deliberation</p>
+                    <p className="text-xs text-[var(--text-muted)]">Creates a delib session for this round directly (no grading phase).</p>
+                    <button
+                      onClick={startDeliberation}
+                      disabled={delibLoading}
+                      className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer"
+                    >
+                      {delibLoading ? 'Creating session...' : 'Start Deliberation'}
+                    </button>
+                    {delibMessage && (
+                      <p className={`text-sm ${delibMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                        {delibMessage}
+                      </p>
+                    )}
+                  </div>
+                )}
               </Section>
             )}
 
