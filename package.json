@@ -10,8 +10,6 @@
   },
   "dependencies": {
     "@auth/mongodb-adapter": "^3.11.2",
-    "@supabase/ssr": "^0.10.2",
-    "@supabase/supabase-js": "^2.103.0",
     "@types/papaparse": "^5.5.2",
     "mongoose": "^9.6.1",
     "next": "16.2.3",
