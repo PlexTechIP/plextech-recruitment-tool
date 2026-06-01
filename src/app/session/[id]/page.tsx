@@ -224,6 +224,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
               {' · '}
               <span className={session.status === 'active' ? 'text-green-600' : 'text-red-500'}>{session.status}</span>
               {session.anonymous && <span className="ml-1 text-yellow-400">· anon</span>}
+              {session.role && (
+                <span className={`ml-1 ${session.role === 'curriculum' ? 'text-purple-400' : 'text-cyan-400'}`}>· {session.role}</span>
+              )}
             </p>
           </div>
         </div>
@@ -688,14 +691,19 @@ function DataFields({ data }: { data: Record<string, unknown> }) {
   const entries = Object.entries(data).filter(([, v]) => v !== null && v !== undefined && v !== '')
 
   const urls = entries.filter(([, v]) => typeof v === 'string' && isUrl(v as string))
-  const rest = entries.filter(([, v]) => !(typeof v === 'string' && isUrl(v as string)))
+  const nonUrl = entries.filter(([, v]) => !(typeof v === 'string' && isUrl(v as string)))
+
+  // Split into compact (numbers / short strings) and long-text (multi-line interview responses)
+  const isLongText = (v: unknown) =>
+    typeof v === 'string' && (v.length > 80 || v.includes('\n'))
+  const compact = nonUrl.filter(([, v]) => !isLongText(v))
+  const longText = nonUrl.filter(([, v]) => isLongText(v))
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Non-URL fields as a grid */}
-      {rest.length > 0 && (
+      {compact.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {rest.map(([key, val]) => (
+          {compact.map(([key, val]) => (
             <div key={key} className="bg-[var(--bg-raised)]/80 border border-[var(--border)] rounded-lg p-3">
               <p className="text-xs text-[var(--text-muted)] mb-0.5 truncate">{key}</p>
               <p className="text-[var(--text-primary)] font-medium text-sm break-words">{formatValue(val)}</p>
@@ -704,7 +712,21 @@ function DataFields({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
 
-      {/* URL fields as links */}
+      {longText.length > 0 && (
+        <div className="space-y-2">
+          {longText.map(([key, val]) => (
+            <details key={key} className="bg-[var(--bg-raised)]/80 border border-[var(--border)] rounded-lg">
+              <summary className="cursor-pointer px-3 py-2 text-xs text-[var(--text-muted)] font-medium hover:text-[var(--text-primary)]">
+                {key}
+              </summary>
+              <p className="px-3 pb-3 text-sm text-[var(--text-primary)] whitespace-pre-wrap break-words">
+                {String(val)}
+              </p>
+            </details>
+          ))}
+        </div>
+      )}
+
       {urls.length > 0 && (
         <div className="flex flex-wrap gap-3">
           {urls.map(([key, val]) => (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Candidate } from '@/lib/models'
+import { Candidate, Vote, CandidateNote } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -26,6 +26,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   await connectDB()
   const { id } = await params
-  await Candidate.findByIdAndDelete(id)
+  // Cascade votes and notes alongside the candidate so they don't orphan.
+  await Promise.all([
+    Candidate.findByIdAndDelete(id),
+    Vote.deleteMany({ candidate_id: id }),
+    CandidateNote.deleteMany({ candidate_id: id }),
+  ])
   return NextResponse.json({ ok: true })
 }

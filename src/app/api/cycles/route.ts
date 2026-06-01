@@ -4,6 +4,9 @@ import { RecruitmentCycle } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET() {
+  const auth = await requireRole('grader')
+  if (auth instanceof NextResponse) return auth
+
   await connectDB()
   await RecruitmentCycle.updateMany(
     { accepting_applications: true, application_deadline: { $lte: new Date() } },

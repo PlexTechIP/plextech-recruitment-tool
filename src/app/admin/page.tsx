@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
-import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus, GradingType } from '@/lib/types'
+import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
 import Papa from 'papaparse'
 
@@ -54,9 +54,6 @@ export default function AdminPage() {
   const [rounds, setRounds] = useState<Round[]>([])
   const [selectedRound, setSelectedRound] = useState<Round | null>(null)
   const roundDetailRef = useRef<HTMLDivElement>(null)
-  const [newRoundName, setNewRoundName] = useState('')
-  const [newRoundType, setNewRoundType] = useState<GradingType | ''>('rubric')
-  const [roundError, setRoundError] = useState('')
 
   // Grader assignment
   const [assignMessage, setAssignMessage] = useState('')
@@ -68,6 +65,7 @@ export default function AdminPage() {
   // Start deliberation
   const [delibLoading, setDelibLoading] = useState(false)
   const [delibMessage, setDelibMessage] = useState('')
+  const [roundSessions, setRoundSessions] = useState<{ id: string; status: string; role: 'curriculum' | 'developer' | null }[]>([])
 
   // Deadline
   const [deadlineInput, setDeadlineInput] = useState<string>('')
@@ -90,7 +88,8 @@ export default function AdminPage() {
   const [interviewCsvText, setInterviewCsvText] = useState<string>('')
   const [interviewColumns, setInterviewColumns] = useState<string[]>([])
   const [nameColumn, setNameColumn] = useState<string>('')
-  const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; avg: number }[] | null>(null)
+  const [maxRating, setMaxRating] = useState<number>(7)
+  const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; texts: Record<string, string>; avg: number }[] | null>(null)
   const [interviewImporting, setInterviewImporting] = useState(false)
   const [interviewMessage, setInterviewMessage] = useState('')
 
@@ -111,6 +110,25 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => { if (!loading) loadCycles() }, [loading, loadCycles])
+
+  // Restore previously selected cycle from sessionStorage once cycles load.
+  // Gate the persist effect on this ref so the initial null state doesn't
+  // wipe the saved id before we get a chance to read it.
+  const cycleRestoredRef = useRef(false)
+  useEffect(() => {
+    if (cycleRestoredRef.current || cycles.length === 0) return
+    cycleRestoredRef.current = true
+    const savedId = sessionStorage.getItem('admin:selectedCycleId')
+    if (!savedId) return
+    const match = cycles.find(c => c.id === savedId)
+    if (match) setSelectedCycle(match)
+  }, [cycles])
+
+  useEffect(() => {
+    if (!cycleRestoredRef.current) return
+    if (selectedCycle) sessionStorage.setItem('admin:selectedCycleId', selectedCycle.id)
+    else sessionStorage.removeItem('admin:selectedCycleId')
+  }, [selectedCycle])
 
   async function createCycle() {
     setCycleError('')
@@ -198,7 +216,14 @@ export default function AdminPage() {
     setInterviewPreview(null)
     setInterviewCsvText('')
     setInterviewMessage('')
+    setRoundSessions([])
     if (!selectedRound) return
+    fetch(`/api/sessions?round_id=${selectedRound.id}`)
+      .then(r => r.json())
+      .then((data: { id: string; status: string; role: 'curriculum' | 'developer' | null }[]) => {
+        if (Array.isArray(data)) setRoundSessions(data)
+      })
+      .catch(() => {})
     if (selectedRound.grading_type === 'rubric') {
       fetch(`/api/admin/grading-stats?round_id=${selectedRound.id}`)
         .then(r => r.json())
@@ -244,35 +269,6 @@ export default function AdminPage() {
     setRounds(data ?? [])
   }
 
-  async function createRound() {
-    setRoundError('')
-    if (!selectedCycle) return
-    const name = newRoundName.trim()
-    if (!name) { setRoundError('Enter a round name.'); return }
-    const orderIndex = rounds.length + 1
-    const res = await fetch('/api/rounds', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cycle_id: selectedCycle.id,
-        name,
-        order_index: orderIndex,
-        grading_type: newRoundType || null,
-        status: 'pending',
-      }),
-    })
-    if (!res.ok) {
-      const err = await res.json()
-      setRoundError(err.error ?? 'Failed to create round.')
-      return
-    }
-    const data: Round = await res.json()
-    setNewRoundName('')
-    setNewRoundType('rubric')
-    await loadRounds(selectedCycle.id)
-    setSelectedRound(data)
-  }
-
   async function updateRoundStatus(round: Round, status: RoundStatus) {
     await fetch(`/api/rounds/${round.id}`, {
       method: 'PATCH',
@@ -282,6 +278,71 @@ export default function AdminPage() {
     const updated = { ...round, status }
     setRounds(prev => prev.map(r => r.id === round.id ? updated : r))
     setSelectedRound(updated)
+  }
+
+  async function renameRound(round: Round) {
+    const next = prompt('Rename round:', round.name)?.trim()
+    if (!next || next === round.name) return
+    const res = await fetch(`/api/rounds/${round.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert(`Failed to rename round: ${err?.error ?? res.statusText}`)
+      return
+    }
+    const updated = { ...round, name: next }
+    setRounds(prev => prev.map(r => r.id === round.id ? updated : r))
+    if (selectedRound?.id === round.id) setSelectedRound(updated)
+  }
+
+  // Destructively rebuild a rubric round's deliberation sessions: wipe all existing
+  // sessions for the round (and their votes/notes) then re-run startDeliberation to
+  // produce fresh Curriculum + Developer sessions split by applicant.desired_roles.
+  async function resplitRoundByRole() {
+    if (!selectedRound) return
+    if (selectedRound.grading_type !== 'rubric') return
+    const sessionCount = roundSessions.length
+    if (!confirm(
+      `Re-split this round into Curriculum + Developer sessions?\n\n` +
+      `This will DELETE the existing ${sessionCount} session${sessionCount !== 1 ? 's' : ''} ` +
+      `and ALL of their votes and notes, then create fresh sessions split by applicant role.\n\n` +
+      `This cannot be undone. Continue?`
+    )) return
+
+    try {
+      for (const s of roundSessions) {
+        const res = await fetch(`/api/sessions/${s.id}`, { method: 'DELETE' })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(`Failed to delete session ${s.id}: ${err?.error ?? res.statusText}`)
+        }
+      }
+      setRoundSessions([])
+      await startDeliberation()
+      // Re-fetch sessions so the new role-tagged ones appear in the UI
+      const data = await fetch(`/api/sessions?round_id=${selectedRound.id}`).then(r => r.json()).catch(() => [])
+      if (Array.isArray(data)) setRoundSessions(data)
+    } catch (err: unknown) {
+      setDelibMessage(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+  }
+
+  async function tagSessionRole(sessionId: string, role: 'curriculum' | 'developer') {
+    const res = await fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert(`Could not tag session: ${err?.error ?? res.statusText}`)
+      return
+    }
+    // Refresh the session list for the selected round
+    setRoundSessions(prev => prev.map(s => s.id === sessionId ? { ...s, role } : s))
   }
 
   async function deleteRound(round: Round) {
@@ -303,7 +364,7 @@ export default function AdminPage() {
     ])
 
     const members = allUsers.filter(u => u.role === 'grader').map(u => u.email)
-    const leadership = allUsers.filter(u => u.role === 'leadership').map(u => u.email)
+    const leadership = allUsers.filter(u => u.role === 'leadership' || u.role === 'admin').map(u => u.email)
     const applicants = (appsData ?? []).map(a => a.id)
 
     if (applicants.length === 0) { setAssignMessage('No applicants found for this cycle.'); setAssignLoading(false); return }
@@ -390,7 +451,7 @@ export default function AdminPage() {
     ])
 
     const members = allUsers.filter(u => u.role === 'grader').map(u => u.email)
-    const leadership = allUsers.filter(u => u.role === 'leadership').map(u => u.email)
+    const leadership = allUsers.filter(u => u.role === 'leadership' || u.role === 'admin').map(u => u.email)
     const applicants = (appsData ?? []).map(a => a.id)
 
     if (applicants.length === 0) { setStartGradingMessage('Round created, but no applicants found to assign.'); setStartGradingLoading(false); return }
@@ -439,12 +500,19 @@ export default function AdminPage() {
 
   // ── interview CSV import ──────────────────────────────────
   function parseInterviewCsv(text: string) {
-    const result = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true, dynamicTyping: false })
+    // Strip UTF-8 BOM that Excel/Sheets exports often include.
+    const clean = text.replace(/^﻿/, '')
+    const result = Papa.parse<Record<string, string>>(clean, { header: true, skipEmptyLines: true, dynamicTyping: false })
     const rows = result.data
     if (!rows.length) return
     const cols = Object.keys(rows[0])
     setInterviewColumns(cols)
-    setNameColumn(cols.find(c => /name/i.test(c)) ?? cols[0])
+    // Pick the first column whose name suggests it holds the candidate's name,
+    // preferring "interviewee/applicant/candidate" over a generic "name" match.
+    const pick = cols.find(c => /interviewee|applicant|candidate/i.test(c))
+      ?? cols.find(c => /\bname\b/i.test(c))
+      ?? cols[0]
+    setNameColumn(pick)
     setInterviewPreview(null)
   }
 
@@ -453,34 +521,88 @@ export default function AdminPage() {
     const result = Papa.parse<Record<string, string>>(interviewCsvText, { header: true, skipEmptyLines: true, dynamicTyping: false })
     const rows = result.data
 
-    // Group by candidate name, average numeric columns (excluding name + timestamp + email)
-    const skipCols = new Set([nameColumn, 'Timestamp', 'Email Address', 'Email', 'email'])
-    const grouped = new Map<string, Record<string, number[]>>()
+    // Identify rating columns: every non-empty cell must parse as a number (rejects text/comment
+    // columns). Out-of-range cells are filtered later, not column-disqualifying — so one stray
+    // "8" on a 1-7 column doesn't drop the whole column.
+    const skipCols = new Set([nameColumn, 'Timestamp', 'Email Address', 'Email', 'email', 'Score', 'Interviewer (member of PlexTech)'])
+    const allCols = rows.length > 0 ? Object.keys(rows[0]) : []
+    const ratingCols = new Set<string>()
+    for (const col of allCols) {
+      if (skipCols.has(col)) continue
+      let hasValue = false
+      let valid = true
+      for (const row of rows) {
+        const raw = (row[col] ?? '').trim()
+        if (!raw) continue
+        const n = parseFloat(raw)
+        // Reject if cell has content but doesn't parse as a number (i.e. it's text).
+        // parseFloat is lenient — "7/10" → 7 — so we also require the string to look numeric.
+        if (isNaN(n) || !/^-?\d+(\.\d+)?$/.test(raw)) { valid = false; break }
+        hasValue = true
+      }
+      if (valid && hasValue) ratingCols.add(col)
+    }
 
+    // Text columns: anything that's not a rating column, not in skipCols, and has at least one
+    // non-empty value across rows. These hold per-interviewer notes/responses.
+    const textCols: string[] = []
+    for (const col of allCols) {
+      if (skipCols.has(col) || ratingCols.has(col)) continue
+      if (rows.some(row => (row[col] ?? '').trim().length > 0)) textCols.push(col)
+    }
+
+    // Auto-detect the "interviewer" column so text entries can be attributed.
+    const interviewerCol = allCols.find(c => /interviewer|grader|reviewer/i.test(c))
+      ?? 'Interviewer (member of PlexTech)'
+
+    type CandidateAgg = {
+      scores: Record<string, number[]>
+      texts: Record<string, string[]>  // per column: ["Interviewer A: ...", "Interviewer B: ..."]
+    }
+    const grouped = new Map<string, CandidateAgg>()
     for (const row of rows) {
       const name = (row[nameColumn] ?? '').trim()
       if (!name) continue
-      if (!grouped.has(name)) grouped.set(name, {})
+      if (!grouped.has(name)) grouped.set(name, { scores: {}, texts: {} })
       const entry = grouped.get(name)!
-      for (const [col, val] of Object.entries(row)) {
-        if (skipCols.has(col)) continue
-        const n = parseFloat(val)
-        if (isNaN(n)) continue
-        if (!entry[col]) entry[col] = []
-        entry[col].push(n)
+      const interviewer = (row[interviewerCol] ?? '').trim() || 'Interviewer'
+
+      for (const col of ratingCols) {
+        const raw = (row[col] ?? '').trim()
+        if (!raw) continue
+        const n = parseFloat(raw)
+        if (isNaN(n) || n < 0 || n > maxRating) continue
+        if (!entry.scores[col]) entry.scores[col] = []
+        entry.scores[col].push(n)
+      }
+
+      for (const col of textCols) {
+        const raw = (row[col] ?? '').trim()
+        if (!raw) continue
+        if (!entry.texts[col]) entry.texts[col] = []
+        entry.texts[col].push(`${interviewer}: ${raw}`)
       }
     }
 
-    const preview = [...grouped.entries()].map(([name, scores]) => {
+    const preview = [...grouped.entries()].map(([name, agg]) => {
       const avgScores: Record<string, number> = {}
       let total = 0, count = 0
-      for (const [col, vals] of Object.entries(scores)) {
+      for (const [col, vals] of Object.entries(agg.scores)) {
         const avg = vals.reduce((a, b) => a + b, 0) / vals.length
         avgScores[col] = Math.round(avg * 100) / 100
         total += avg
         count++
       }
-      return { name, scores: avgScores, avg: count > 0 ? Math.round((total / count) * 100) / 100 : 0 }
+      const texts: Record<string, string> = {}
+      for (const [col, vals] of Object.entries(agg.texts)) {
+        texts[col] = vals.join('\n\n')
+      }
+      return {
+        name,
+        scores: avgScores,
+        texts,
+        avg: count > 0 ? Math.round((total / count) * 100) / 100 : 0,
+      }
     }).sort((a, b) => b.avg - a.avg)
 
     setInterviewPreview(preview)
@@ -502,6 +624,7 @@ export default function AdminPage() {
           status: 'active',
           created_by: currentUser.email,
           anonymous: false,
+          role: selectedRound.role ?? null,
         }),
       })
       if (!sessionRes.ok) throw new Error('Failed to create session.')
@@ -514,7 +637,7 @@ export default function AdminPage() {
         session_id: sessionId,
         name: c.name,
         status: 'pending',
-        data: { score: c.avg, candidate_number: idx + 1, ...c.scores },
+        data: { score: c.avg, candidate_number: idx + 1, ...c.scores, ...c.texts },
       }))
       await fetch(`/api/sessions/${sessionId}/candidates`, {
         method: 'POST',
@@ -549,6 +672,7 @@ export default function AdminPage() {
   }
 
   // ── start deliberation ───────────────────────────────────
+  // Creates two sessions for the rubric round — one per applicant role (curriculum, developer).
   async function startDeliberation() {
     if (!selectedRound || !selectedCycle || !currentUser) return
     setDelibLoading(true)
@@ -565,56 +689,72 @@ export default function AdminPage() {
       const evaluated = evaluateResults(reviewsData, appsData as Applicant[])
       if (!evaluated.length) throw new Error('Could not compute scores. Check that reviews exist.')
 
-      const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
-      const sessionName = `${selectedCycle.name} — ${selectedRound.name}`
+      const roleSplits: { role: 'curriculum' | 'developer'; label: string; match: (dr: string | null) => boolean }[] = [
+        { role: 'curriculum', label: 'Curriculum', match: dr => dr !== 'Industry Developer' },
+        { role: 'developer',  label: 'Developer',  match: dr => dr === 'Industry Developer' },
+      ]
 
-      const sessionRes = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: sessionId,
-          round_id: selectedRound.id,
-          name: sessionName,
-          status: 'active',
-          created_by: currentUser.email,
-          anonymous: false,
-        }),
-      })
-      if (!sessionRes.ok) {
-        const err = await sessionRes.json()
-        throw new Error(err.error ?? 'Failed to create session.')
+      const createdIds: string[] = []
+
+      for (const split of roleSplits) {
+        const filtered = evaluated.filter(ev => split.match(ev.desired_roles))
+        if (!filtered.length) continue
+
+        const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
+        const sessionName = `${selectedCycle.name} — ${selectedRound.name} (${split.label})`
+
+        const sessionRes = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: sessionId,
+            round_id: selectedRound.id,
+            name: sessionName,
+            status: 'active',
+            created_by: currentUser.email,
+            anonymous: false,
+            role: split.role,
+          }),
+        })
+        if (!sessionRes.ok) {
+          const err = await sessionRes.json().catch(() => ({}))
+          throw new Error(err.error ?? `Failed to create ${split.label} session.`)
+        }
+
+        await fetch('/api/session-members', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
+        })
+
+        const candidates = filtered.map((ev, idx) => ({
+          session_id: sessionId,
+          applicant_id: ev.applicant_id,
+          name: `${ev.first_name} ${ev.last_name}`,
+          status: 'pending',
+          data: {
+            score: ev.total,
+            candidate_number: idx + 1,
+            desired_roles: ev.desired_roles,
+            r0: ev.r0, r1: ev.r1, r2: ev.r2, r3: ev.r3, r4: ev.r4,
+            r5: ev.r5, r6: ev.r6, r7: ev.r7, r8: ev.r8, r9: ev.r9,
+          },
+        }))
+
+        await fetch(`/api/sessions/${sessionId}/candidates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(candidates),
+        })
+
+        createdIds.push(`${split.label}: ${sessionId}`)
       }
 
-      await fetch('/api/session-members', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
-      })
-
-      const candidates = evaluated.map((ev, idx) => ({
-        session_id: sessionId,
-        applicant_id: ev.applicant_id,
-        name: `${ev.first_name} ${ev.last_name}`,
-        status: 'pending',
-        data: {
-          score: ev.total,
-          candidate_number: idx + 1,
-          desired_roles: ev.desired_roles,
-          r0: ev.r0, r1: ev.r1, r2: ev.r2, r3: ev.r3, r4: ev.r4,
-          r5: ev.r5, r6: ev.r6, r7: ev.r7, r8: ev.r8, r9: ev.r9,
-        },
-      }))
-
-      await fetch(`/api/sessions/${sessionId}/candidates`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(candidates),
-      })
+      if (!createdIds.length) throw new Error('No applicants matched curriculum or developer roles.')
 
       await updateRoundStatus(selectedRound, 'deliberating')
 
-      setDelibMessage(`Session created! ID: ${sessionId}`)
-      setTimeout(() => router.push(`/session/${sessionId}`), 1500)
+      setDelibMessage(`Sessions created — ${createdIds.join(', ')}`)
     } catch (err: unknown) {
       setDelibMessage(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
@@ -885,13 +1025,22 @@ export default function AdminPage() {
                       onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
                       className="flex-1 text-left px-4 py-3"
                     >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="font-medium text-sm text-[var(--text-primary)]">{round.name}</p>
-                          <p className="text-xs text-[var(--text-muted)] mt-0.5">{round.grading_type ?? 'delib only'}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm text-[var(--text-primary)] truncate">{round.name}</p>
+                          <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                            {round.grading_type ?? 'delib only'}{round.role ? ` · ${round.role}` : ''}
+                          </p>
                         </div>
                         <Badge label={round.status} color={STATUS_COLOR[round.status]} />
                       </div>
+                    </button>
+                    <button
+                      onClick={() => renameRound(round)}
+                      className="px-2 py-3 text-[var(--text-muted)] hover:text-[#FF6B35] transition-colors text-sm"
+                      title="Rename round"
+                    >
+                      ✎
                     </button>
                     <button
                       onClick={() => deleteRound(round)}
@@ -904,38 +1053,8 @@ export default function AdminPage() {
                 ))}
 
                 {rounds.length === 0 && (
-                  <p className="text-sm text-[var(--text-muted)]">No rounds yet. Create one below.</p>
+                  <p className="text-sm text-[var(--text-muted)]">No rounds yet. Rounds are created automatically when you start grading or advance accepted candidates.</p>
                 )}
-              </div>
-
-              {/* New round */}
-              <div className="pt-3 border-t border-[var(--border)] space-y-2">
-                <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">New Round</p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newRoundName}
-                    onChange={e => setNewRoundName(e.target.value)}
-                    placeholder="e.g. Application Review"
-                    className="flex-1 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
-                  />
-                  <select
-                    value={newRoundType}
-                    onChange={e => setNewRoundType(e.target.value as GradingType | '')}
-                    className="bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-2 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
-                  >
-                    <option value="rubric">Rubric</option>
-                    <option value="interview">Interview</option>
-                    <option value="">Delib only</option>
-                  </select>
-                </div>
-                {roundError && <p className="text-red-400 text-xs">{roundError}</p>}
-                <button
-                  onClick={createRound}
-                  className="plex-gradient text-white text-sm font-medium px-4 py-2 rounded-lg"
-                >
-                  Create Round
-                </button>
               </div>
             </Section>
 
@@ -943,21 +1062,53 @@ export default function AdminPage() {
             <div ref={roundDetailRef} />
             {selectedRound && (
               <Section title={`Round: ${selectedRound.name}`}>
-                {/* Status controls */}
-                <div className="flex gap-2 flex-wrap">
-                  {(['pending', 'grading', 'deliberating', 'ended'] as RoundStatus[]).map(s => (
+                {/* Status (read-only) + role + per-session deliberation links */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge label={selectedRound.status} color={STATUS_COLOR[selectedRound.status]} />
+                  {selectedRound.role && (
+                    <Badge
+                      label={selectedRound.role}
+                      color={selectedRound.role === 'curriculum'
+                        ? 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                        : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'}
+                    />
+                  )}
+                  <button
+                    onClick={() => renameRound(selectedRound)}
+                    className="text-xs px-3 py-1.5 rounded-lg border font-medium bg-[var(--bg-raised)] border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                  >
+                    Rename ✎
+                  </button>
+                  {roundSessions.map(s => {
+                    const dot = s.role === 'curriculum'
+                      ? 'bg-purple-400'
+                      : s.role === 'developer'
+                        ? 'bg-cyan-400'
+                        : 'bg-[var(--text-muted)]'
+
+                    const label = s.role
+                      ? s.role.charAt(0).toUpperCase() + s.role.slice(1)
+                      : s.id
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => router.push(`/session/${s.id}`)}
+                        className="text-xs px-3 py-1.5 rounded-lg border font-medium bg-[var(--bg-raised)] border-[var(--border)] text-[var(--text-primary)] hover:border-[#FF6B35]/40 transition-colors inline-flex items-center gap-2"
+                      >
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
+                        Go to {label} Deliberation →
+                      </button>
+                    )
+                  })}
+                  {selectedRound.grading_type === 'rubric' && roundSessions.some(s => !s.role) && (
                     <button
-                      key={s}
-                      onClick={() => updateRoundStatus(selectedRound, s)}
-                      className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors cursor-pointer ${
-                        selectedRound.status === s
-                          ? STATUS_COLOR[s].replace('/15', '/30')
-                          : 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'
-                      }`}
+                      onClick={resplitRoundByRole}
+                      className="text-xs px-3 py-1.5 rounded-lg border font-medium bg-red-500/10 border-red-500/40 text-red-300 hover:bg-red-500/20 transition-colors"
+                      title="Delete the current session(s) and re-create them as separate Curriculum + Developer deliberations based on each applicant's selected role."
                     >
-                      {s}
+                      Re-split by Role ⟳
                     </button>
-                  ))}
+                  )}
                 </div>
 
                 {/* ── RUBRIC round ── */}
@@ -1127,7 +1278,7 @@ export default function AdminPage() {
                       />
 
                       {interviewColumns.length > 0 && (
-                        <div className="flex gap-2 items-center">
+                        <div className="flex gap-2 items-center flex-wrap">
                           <label className="text-xs text-[var(--text-muted)] shrink-0">Candidate name column:</label>
                           <select
                             value={nameColumn}
@@ -1136,6 +1287,14 @@ export default function AdminPage() {
                           >
                             {interviewColumns.map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
+                          <label className="text-xs text-[var(--text-muted)] shrink-0">Max rating:</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={maxRating}
+                            onChange={e => setMaxRating(Number(e.target.value) || 0)}
+                            className="w-20 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
+                          />
                           <button
                             onClick={buildInterviewPreview}
                             className="plex-gradient text-white text-sm font-medium px-3 py-1.5 rounded-lg cursor-pointer"
@@ -1145,7 +1304,10 @@ export default function AdminPage() {
                         </div>
                       )}
 
-                      {interviewPreview && (
+                      {interviewPreview && interviewPreview.length === 0 && (
+                        <p className="text-xs text-red-400">No candidates found. Check that &quot;{nameColumn}&quot; is the correct name column — it appears empty for every row.</p>
+                      )}
+                      {interviewPreview && interviewPreview.length > 0 && (
                         <div className="space-y-2">
                           <p className="text-xs text-[var(--text-muted)]">{interviewPreview.length} candidates parsed — scores averaged across all graders</p>
                           <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--border)]">

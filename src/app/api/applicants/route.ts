@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, EssayResponse } from '@/lib/models'
+import { Applicant, EssayResponse, RecruitmentCycle } from '@/lib/models'
 
 const VALID_RACES = [
   'American Indian or Alaska Native',
@@ -42,6 +42,23 @@ export async function POST(req: NextRequest) {
   }
   if (!VALID_ROLES.includes(desired_roles)) {
     return NextResponse.json({ error: 'Invalid role.' }, { status: 400 })
+  }
+
+  // Enforce that the cycle is actively accepting applications and the deadline (if set) hasn't passed.
+  // This route is intentionally unauthenticated (applicants don't have accounts), so the window check
+  // is the only guard against spam / out-of-window submissions.
+  let cycle
+  try {
+    cycle = await RecruitmentCycle.findById(cycle_id).lean()
+  } catch {
+    return NextResponse.json({ error: 'Invalid cycle.' }, { status: 400 })
+  }
+  if (!cycle) return NextResponse.json({ error: 'Cycle not found.' }, { status: 404 })
+  if (cycle.status !== 'active' || !cycle.accepting_applications) {
+    return NextResponse.json({ error: 'This cycle is not accepting applications.' }, { status: 403 })
+  }
+  if (cycle.application_deadline && new Date(cycle.application_deadline).getTime() < Date.now()) {
+    return NextResponse.json({ error: 'The application deadline has passed.' }, { status: 403 })
   }
 
   const existing = await Applicant.findOne({ cycle_id, email })

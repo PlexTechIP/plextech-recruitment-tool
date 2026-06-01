@@ -5,6 +5,7 @@
 export type CandidateStatus = 'pending' | 'accepted' | 'rejected' | 'hold'
 export type SessionStatus = 'active' | 'ended'
 export type VoteType = 'vouch' | 'anti_vouch' | 'red_flag'
+export type ApplicantRole = 'curriculum' | 'developer'
 
 export interface Session {
   id: string
@@ -14,6 +15,7 @@ export interface Session {
   status: SessionStatus
   created_by: string
   anonymous: boolean
+  role: ApplicantRole | null
 }
 
 export interface Candidate {
@@ -84,6 +86,7 @@ export interface Round {
   grading_type: GradingType | null
   status: RoundStatus
   interview_form_url: string | null
+  role: ApplicantRole | null
   created_at: string
 }
 

@@ -22,6 +22,7 @@ interface ApplicantFull extends Applicant {
 
 interface RoundSummary {
   round: Round
+  cycleName: string | null
   total: number
   completed: number
 }
@@ -110,8 +111,17 @@ export default function GradePage() {
     const rounds = roundResults.filter(Boolean) as Round[]
     rounds.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
 
+    // Fetch the cycle name for each unique cycle_id touched by these rounds
+    const cycleIds = [...new Set(rounds.map(r => r.cycle_id).filter(Boolean))]
+    const cycleResults = await Promise.all(
+      cycleIds.map(id => fetch(`/api/cycles/${id}`).then(r => r.ok ? r.json() : null))
+    )
+    const cycleNameById = new Map<string, string>()
+    for (const c of cycleResults) if (c?.id && c?.name) cycleNameById.set(c.id, c.name)
+
     const summaries: RoundSummary[] = rounds.map(r => ({
       round: r,
+      cycleName: cycleNameById.get(r.cycle_id) ?? null,
       total: roundMap.get(r.id)!.total,
       completed: roundMap.get(r.id)!.completed,
     }))
@@ -274,7 +284,7 @@ export default function GradePage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {roundSummaries.map(({ round, total, completed }) => {
+              {roundSummaries.map(({ round, cycleName, total, completed }) => {
                 const pending = total - completed
                 const isInterview = round.grading_type === 'interview'
                 return (
@@ -283,6 +293,7 @@ export default function GradePage() {
                       <div className="bg-[var(--bg-surface)] border border-[#ff8a00]/40 rounded-xl p-5 space-y-3">
                         <div className="flex items-center justify-between">
                           <div>
+                            {cycleName && <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider">{cycleName}</p>}
                             <p className="font-semibold text-[var(--text-primary)]">{round.name}</p>
                             <p className="text-sm text-[var(--text-muted)] mt-0.5">Interview round — fill out the form below while interviewing</p>
                           </div>
@@ -305,6 +316,7 @@ export default function GradePage() {
                       >
                         <div className="flex items-center justify-between">
                           <div>
+                            {cycleName && <p className="text-xs text-[var(--text-muted)] uppercase tracking-wider">{cycleName}</p>}
                             <p className="font-semibold text-[var(--text-primary)]">{round.name}</p>
                             <p className="text-sm text-[var(--text-muted)] mt-0.5">
                               {pending > 0 ? `${pending} applicant${pending !== 1 ? 's' : ''} remaining` : 'All done!'}

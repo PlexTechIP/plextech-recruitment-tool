@@ -68,8 +68,18 @@ const RoundSchema = new Schema({
   grading_type:       { type: String, enum: ['rubric', 'interview', null], default: null },
   status:             { type: String, enum: ['pending', 'grading', 'deliberating', 'ended'], default: 'pending' },
   interview_form_url: { type: String, default: null },
+  role:               { type: String, enum: ['curriculum', 'developer', null], default: null },
   created_at:         { type: Date, default: Date.now },
 })
+// One round per (cycle, role, order_index). Partial filter so legacy null-role rounds
+// don't trip the index — only role-tagged rounds are constrained.
+RoundSchema.index(
+  { cycle_id: 1, role: 1, order_index: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { role: { $type: 'string' } },
+  },
+)
 export const Round = models.Round || model('Round', RoundSchema)
 
 // ─── Grader Assignments ──────────────────────────────────────
@@ -103,8 +113,18 @@ const SessionSchema = new Schema({
   status:     { type: String, enum: ['active', 'ended'], default: 'active' },
   created_by: { type: String, required: true },
   anonymous:  { type: Boolean, default: false },
+  role:       { type: String, enum: ['curriculum', 'developer', null], default: null },
   created_at: { type: Date, default: Date.now },
 }, { _id: false })
+// One active session per (round_id, role). Partial filter excludes legacy null-role rows
+// and ended sessions so this can be added without a data migration.
+SessionSchema.index(
+  { round_id: 1, role: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'active', role: { $type: 'string' } },
+  },
+)
 export const Session = models.Session || model('Session', SessionSchema)
 
 // ─── Candidates ──────────────────────────────────────────────
@@ -121,9 +141,15 @@ export const Candidate = models.Candidate || model('Candidate', CandidateSchema)
 // ─── Votes ───────────────────────────────────────────────────
 const VoteSchema = new Schema({
   candidate_id: { type: Schema.Types.ObjectId, ref: 'Candidate', required: true },
-  voter_name:   { type: String, required: true },
+  voter_name:   { type: String, required: true },           // display name (UI)
+  voter_email:  { type: String, default: null, lowercase: true }, // owner (auth) — null on legacy rows
   vote_type:    { type: String, enum: ['vouch', 'anti_vouch', 'red_flag'], required: true },
 })
+// Sparse unique: only enforced on rows that have a voter_email (i.e. created after the migration).
+VoteSchema.index(
+  { candidate_id: 1, voter_email: 1, vote_type: 1 },
+  { unique: true, partialFilterExpression: { voter_email: { $type: 'string' } } },
+)
 export const Vote = models.Vote || model('Vote', VoteSchema)
 
 // ─── Candidate Notes ─────────────────────────────────────────

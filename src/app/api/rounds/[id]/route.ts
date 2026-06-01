@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Round, GraderAssignment, Review } from '@/lib/models'
+import { Round, GraderAssignment, Review, Session, Candidate, Vote, CandidateNote, SessionMember } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -37,10 +37,26 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   await connectDB()
   const { id } = await params
+
+  // Cascade: rounds own sessions, sessions own candidates, candidates own votes + notes.
+  // We resolve children first so we can wipe descendants by id rather than session/round joins.
+  const sessions = await Session.find({ round_id: id }).select('_id').lean()
+  const sessionIds = sessions.map(s => s._id)
+
+  const candidates = sessionIds.length
+    ? await Candidate.find({ session_id: { $in: sessionIds } }).select('_id').lean()
+    : []
+  const candidateIds = candidates.map(c => c._id)
+
   await Promise.all([
     Round.findByIdAndDelete(id),
     GraderAssignment.deleteMany({ round_id: id }),
     Review.deleteMany({ round_id: id }),
+    sessionIds.length ? Session.deleteMany({ _id: { $in: sessionIds } }) : Promise.resolve(),
+    sessionIds.length ? SessionMember.deleteMany({ session_id: { $in: sessionIds } }) : Promise.resolve(),
+    sessionIds.length ? Candidate.deleteMany({ session_id: { $in: sessionIds } }) : Promise.resolve(),
+    candidateIds.length ? Vote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),
+    candidateIds.length ? CandidateNote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),
   ])
   return NextResponse.json({ ok: true })
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Review } from '@/lib/models'
+import { Review, GraderAssignment } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -41,6 +41,24 @@ export async function POST(req: NextRequest) {
   // Enforce that graders can only submit reviews under their own email
   if (body.grader_email && body.grader_email.toLowerCase() !== auth.email.toLowerCase()) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  if (!body.round_id || !body.applicant_id) {
+    return NextResponse.json({ error: 'round_id and applicant_id are required.' }, { status: 400 })
+  }
+
+  // Ensure the grader is actually assigned to this applicant for this round —
+  // otherwise anyone with grader-level access could poison the score pool.
+  const assigned = await GraderAssignment.exists({
+    round_id: body.round_id,
+    applicant_id: body.applicant_id,
+    grader_email: auth.email,
+  })
+  if (!assigned) {
+    return NextResponse.json(
+      { error: 'You are not assigned to grade this applicant in this round.' },
+      { status: 403 },
+    )
   }
 
   try {

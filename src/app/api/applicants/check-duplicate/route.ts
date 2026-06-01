@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant } from '@/lib/models'
+import { Applicant, RecruitmentCycle } from '@/lib/models'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -21,6 +21,15 @@ export async function GET(req: NextRequest) {
   }
 
   await connectDB()
+
+  // Only confirm existence for cycles currently accepting applications. This
+  // narrows enumeration to the active application window where the user could
+  // legitimately know about the cycle anyway.
+  const cycle = await RecruitmentCycle.findById(cycle_id).lean()
+  if (!cycle || cycle.status !== 'active' || !cycle.accepting_applications) {
+    return NextResponse.json({ exists: false })
+  }
+
   const existing = await Applicant.exists({ cycle_id, email: emailTrimmed })
   return NextResponse.json({ exists: !!existing })
 }

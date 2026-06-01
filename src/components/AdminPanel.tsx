@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { Session, GradingType } from '@/lib/types'
+import { Session } from '@/lib/types'
 import { parseDelibCSV } from '@/lib/csv'
 
 interface Props {
@@ -12,7 +11,6 @@ interface Props {
 }
 
 export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
-  const router = useRouter()
   const [tab, setTab] = useState<'session' | 'emails'>('session')
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
@@ -185,7 +183,6 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
 
   // ── Advance to Next Round ─────────────────────────────────
   const [nextRoundName, setNextRoundName] = useState('')
-  const [nextRoundType, setNextRoundType] = useState<GradingType | ''>('rubric')
   const [advancing, setAdvancing] = useState(false)
   const [advanceMessage, setAdvanceMessage] = useState('')
 
@@ -202,7 +199,22 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
       if (!roundRes.ok) throw new Error('Could not load current round.')
       const currentRound = await roundRes.json()
 
-      // Create new round
+      // Ensure no later round exists for this cycle on the same role track
+      const cycleRoundsRes = await fetch(`/api/cycles/${currentRound.cycle_id}/rounds`)
+      const cycleRounds: { order_index: number; role: string | null }[] = cycleRoundsRes.ok ? await cycleRoundsRes.json() : []
+      const sourceRole = session.role ?? null
+      if (cycleRounds.some(r => r.order_index > currentRound.order_index && (r.role ?? null) === sourceRole)) {
+        throw new Error('Candidates have already been advanced to a later round on this track.')
+      }
+
+      // Get accepted candidates from current session — verify before creating anything
+      const candsRes = await fetch(`/api/sessions/${sessionId}/candidates`)
+      const allCands = candsRes.ok ? await candsRes.json() : []
+      const accepted = allCands.filter((c: { status: string }) => c.status === 'accepted')
+      if (!accepted.length) throw new Error('No accepted candidates to advance.')
+
+      // Create new round — inherit the role from the source session so curriculum and
+      // developer tracks advance independently.
       const newRoundRes = await fetch('/api/rounds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -210,64 +222,16 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
           cycle_id: currentRound.cycle_id,
           name,
           order_index: currentRound.order_index + 1,
-          grading_type: nextRoundType || null,
+          grading_type: 'interview',
           status: 'pending',
+          role: session.role ?? null,
         }),
       })
       if (!newRoundRes.ok) {
         const body = await newRoundRes.json().catch(() => ({}))
         throw new Error('Could not create round: ' + (body?.error ?? newRoundRes.statusText))
       }
-      const newRound = await newRoundRes.json()
-
-      // Get accepted candidates from current session
-      const candsRes = await fetch(`/api/sessions/${sessionId}/candidates`)
-      const allCands = candsRes.ok ? await candsRes.json() : []
-      const accepted = allCands.filter((c: { status: string }) => c.status === 'accepted')
-      if (!accepted.length) throw new Error('No accepted candidates to advance.')
-
-      // Create new session
-      const newSessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
-      const sessionRes = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: newSessionId,
-          round_id: newRound.id,
-          name: `${name} Deliberation`,
-          status: 'active',
-          created_by: session.created_by,
-          anonymous: false,
-        }),
-      })
-      if (!sessionRes.ok) {
-        const body = await sessionRes.json().catch(() => ({}))
-        throw new Error('Could not create session: ' + (body?.error ?? sessionRes.statusText))
-      }
-
-      // Add creator as member
-      await fetch('/api/session-members', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: newSessionId, user_email: session.created_by }),
-      })
-
-      // Insert accepted candidates into new session (carry over scores from data)
-      const candidateRows = accepted.map((c: { applicant_id: string; name: string; data: Record<string, unknown> }, idx: number) => ({
-        session_id: newSessionId,
-        applicant_id: c.applicant_id,
-        name: c.name,
-        status: 'pending',
-        data: { ...(c.data as Record<string, unknown>), candidate_number: idx + 1 },
-      }))
-      await fetch(`/api/sessions/${newSessionId}/candidates`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(candidateRows),
-      })
-
-      setAdvanceMessage(`Created! Redirecting to new session…`)
-      setTimeout(() => router.push(`/session/${newSessionId}`), 1200)
+      setAdvanceMessage(`Created round "${name}" with ${accepted.length} accepted candidate${accepted.length !== 1 ? 's' : ''}. Set up the interview form in the admin console, then import responses to start deliberation.`)
     } catch (err: unknown) {
       setAdvanceMessage(err instanceof Error ? err.message : 'Unknown error.')
     } finally {
@@ -414,15 +378,6 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
                     placeholder="New round name (e.g. Interviews)"
                     className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35]"
                   />
-                  <select
-                    value={nextRoundType}
-                    onChange={e => setNextRoundType(e.target.value as GradingType | '')}
-                    className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
-                  >
-                    <option value="rubric">Rubric grading</option>
-                    <option value="interview">Interview grading</option>
-                    <option value="">Deliberation only</option>
-                  </select>
                   <button
                     onClick={handleAdvanceRound}
                     disabled={advancing}

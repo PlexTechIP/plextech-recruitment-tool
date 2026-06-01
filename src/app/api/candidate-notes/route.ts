@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { CandidateNote } from '@/lib/models'
+import { CandidateNote, Candidate, SessionMember } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -24,6 +24,14 @@ export async function POST(req: NextRequest) {
   const validTypes = ['note', 'red_flag']
   if (!body.candidate_id || !body.content || !validTypes.includes(body.type)) {
     return NextResponse.json({ error: 'Invalid note data' }, { status: 400 })
+  }
+
+  // Match votes: only session members may leave notes on a candidate.
+  const candidate = await Candidate.findById(body.candidate_id).lean()
+  if (!candidate) return NextResponse.json({ error: 'Candidate not found.' }, { status: 404 })
+  const isMember = await SessionMember.exists({ session_id: candidate.session_id, user_email: auth.email })
+  if (!isMember) {
+    return NextResponse.json({ error: 'You are not a member of this deliberation session.' }, { status: 403 })
   }
 
   const note = await CandidateNote.create({
