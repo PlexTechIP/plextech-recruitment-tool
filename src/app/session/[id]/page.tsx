@@ -116,6 +116,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     return () => clearInterval(interval)
   }, [authStatus, sessionId, router, loadData])
 
+  // Auto-join this session on entry — voting and notes require membership,
+  // and users can arrive here directly (admin console links, shared URLs)
+  // without going through the dashboard's join flow.
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !userEmail) return
+    fetch('/api/session-members', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    }).catch(() => {})
+  }, [authStatus, userEmail, sessionId])
+
   // Keep selected in sync when candidates refresh
   useEffect(() => {
     if (selected) {
@@ -124,21 +136,30 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     }
   }, [candidates]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Match by email when the vote has one (server dedupes by email); fall back
+  // to display name for votes cast before email tracking existed.
+  const isMyVote = (v: Vote) =>
+    v.voter_email ? v.voter_email === userEmail.toLowerCase() : v.voter_name === userName
+
   async function handleVote(candidateId: string, voteType: VoteType) {
     if (!userEmail) return
     const voterName = userName
-    const existing = votes.find(v => v.candidate_id === candidateId && v.voter_name === voterName && v.vote_type === voteType)
+    const existing = votes.find(v => v.candidate_id === candidateId && isMyVote(v) && v.vote_type === voteType)
     if (existing) {
-      await fetch('/api/votes', {
+      const res = await fetch('/api/votes', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: existing.id }),
       })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        alert(`Could not remove vote: ${err?.error ?? res.statusText}`)
+      }
     } else {
       // Remove the opposite vote first (can't vouch and anti-vouch simultaneously)
       const opposite = voteType === 'vouch' ? 'anti_vouch' : voteType === 'anti_vouch' ? 'vouch' : null
       if (opposite) {
-        const oppositeVote = votes.find(v => v.candidate_id === candidateId && v.voter_name === voterName && v.vote_type === opposite)
+        const oppositeVote = votes.find(v => v.candidate_id === candidateId && isMyVote(v) && v.vote_type === opposite)
         if (oppositeVote) {
           await fetch('/api/votes', {
             method: 'DELETE',
@@ -147,11 +168,15 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
           })
         }
       }
-      await fetch('/api/votes', {
+      const res = await fetch('/api/votes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ candidate_id: candidateId, voter_name: voterName, vote_type: voteType }),
       })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        alert(`Could not vote: ${err?.error ?? res.statusText}`)
+      }
     }
     await loadData()
   }
@@ -199,7 +224,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 
   const votesFor = (id: string) => votes.filter(v => v.candidate_id === id)
   const myVote = (id: string, type: VoteType) =>
-    votes.some(v => v.candidate_id === id && v.voter_name === myName && v.vote_type === type)
+    votes.some(v => v.candidate_id === id && isMyVote(v) && v.vote_type === type)
 
   const statusCounts = {
     all: candidates.length,
@@ -687,8 +712,81 @@ function formatValue(val: unknown): string {
   return String(val)
 }
 
+// Rubric criteria from the grading form, grouped for display. Values r1–r9 are
+// per-grader z-scores (0 = cohort average); r0 is a raw 1–3 concern rating / 15.
+const RUBRIC_GROUPS: { title: string; keys: [string, string][] }[] = [
+  { title: 'Essay 1', keys: [['r4', 'Criterion 1'], ['r5', 'Criterion 2']] },
+  { title: 'Essay 2', keys: [['r8', 'Criterion 1'], ['r9', 'Criterion 2']] },
+  { title: 'Essay 3', keys: [['r6', 'Criterion 1'], ['r7', 'Criterion 2']] },
+  { title: 'Resume', keys: [['r1', 'Expressiveness'], ['r2', 'Technical depth'], ['r3', 'Passion for building']] },
+]
+const RUBRIC_KEYS = new Set(['r0', ...RUBRIC_GROUPS.flatMap(g => g.keys.map(([k]) => k))])
+
+// Diverging bar for a z-score: center = cohort average, right/green = above, left/red = below.
+function ZBar({ label, value }: { label: string; value: number }) {
+  const clamped = Math.max(-2, Math.min(2, value))
+  const halfWidth = Math.abs(clamped) / 2 * 50 // percent of half-track
+  const positive = clamped >= 0
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-36 shrink-0 text-[var(--text-muted)] truncate" title={label}>{label}</span>
+      <div className="relative flex-1 h-2 rounded-full bg-[var(--bg-raised)] overflow-hidden">
+        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[var(--border)]" />
+        <div
+          className={`absolute top-0 bottom-0 rounded-full ${positive ? 'bg-green-500/70' : 'bg-red-500/70'}`}
+          style={positive
+            ? { left: '50%', width: `${halfWidth}%` }
+            : { right: '50%', width: `${halfWidth}%` }}
+        />
+      </div>
+      <span className={`w-12 shrink-0 text-right font-mono ${positive ? 'text-green-400' : 'text-red-400'}`}>
+        {value > 0 ? '+' : ''}{value.toFixed(2)}
+      </span>
+    </div>
+  )
+}
+
+function RubricStats({ data }: { data: Record<string, unknown> }) {
+  const num = (k: string) => (typeof data[k] === 'number' ? data[k] as number : null)
+  const groups = RUBRIC_GROUPS
+    .map(g => ({ ...g, rows: g.keys.map(([k, label]) => ({ label, value: num(k) })).filter(r => r.value !== null) }))
+    .filter(g => g.rows.length > 0)
+
+  // r0 is stored as (1–3 rating)/15 averaged across graders — recover the 1–3 scale.
+  const r0 = num('r0')
+  const concern = r0 === null ? null : Math.round(r0 * 15 * 10) / 10
+  const concernDisplay = concern === null ? null
+    : concern >= 2.5 ? { text: `No concerns (${concern}/3)`, cls: 'bg-green-500/15 text-green-400 border-green-500/30' }
+    : concern >= 1.5 ? { text: `Could be a problem (${concern}/3)`, cls: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' }
+    : { text: `RED FLAG (${concern}/3)`, cls: 'bg-red-500/15 text-red-400 border-red-500/30' }
+
+  if (!groups.length && !concernDisplay) return null
+
+  return (
+    <div className="bg-[var(--bg-raised)]/60 border border-[var(--border)] rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">Rubric scores vs. cohort average</p>
+        {concernDisplay && (
+          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${concernDisplay.cls}`} title="Time commitment assessment from graders">
+            Time commitments: {concernDisplay.text}
+          </span>
+        )}
+      </div>
+      <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3">
+        {groups.map(g => (
+          <div key={g.title} className="space-y-1.5">
+            <p className="text-xs font-medium text-[var(--text-secondary)]">{g.title}</p>
+            {g.rows.map(r => <ZBar key={r.label} label={r.label} value={r.value!} />)}
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-[var(--text-muted)]">Bars show how this candidate compares to other applicants: right of center = above average, left = below. Scores are normalized per grader.</p>
+    </div>
+  )
+}
+
 function DataFields({ data }: { data: Record<string, unknown> }) {
-  const entries = Object.entries(data).filter(([, v]) => v !== null && v !== undefined && v !== '')
+  const entries = Object.entries(data).filter(([k, v]) => v !== null && v !== undefined && v !== '' && !RUBRIC_KEYS.has(k))
 
   const urls = entries.filter(([, v]) => typeof v === 'string' && isUrl(v as string))
   const nonUrl = entries.filter(([, v]) => !(typeof v === 'string' && isUrl(v as string)))
@@ -711,6 +809,8 @@ function DataFields({ data }: { data: Record<string, unknown> }) {
           ))}
         </div>
       )}
+
+      <RubricStats data={data} />
 
       {longText.length > 0 && (
         <div className="space-y-2">

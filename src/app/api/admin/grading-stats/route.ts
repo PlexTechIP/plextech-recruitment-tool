@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
     email: a.email,
     phone: a.phone,
     year: a.year,
+    transfer: a.transfer ?? false,
     major: a.major,
     gender: a.gender,
     race: a.race,

@@ -39,6 +39,7 @@ export default function ApplicationForm() {
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [year, setYear] = useState('')
+  const [transfer, setTransfer] = useState(false)
   const [major, setMajor] = useState('')
   const [gender, setGender] = useState('')
   const [genderOther, setGenderOther] = useState('')
@@ -53,8 +54,6 @@ export default function ApplicationForm() {
   const raceRef = useRef<HTMLDivElement>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [alreadyApplied, setAlreadyApplied] = useState(false)
-
-  const currentYear = new Date().getFullYear()
 
   useEffect(() => {
     async function load() {
@@ -100,6 +99,7 @@ export default function ApplicationForm() {
     if (!lastName.trim()) e.lastName = 'required'
     if (!email.trim()) e.email = 'required'
     if (!phone.trim()) e.phone = 'required'
+    if (!year) e.year = 'required'
     if (!major.trim()) e.major = 'required'
     if (!role) e.role = 'required'
     if (!resumeFile) e.resume = 'required'
@@ -144,6 +144,7 @@ export default function ApplicationForm() {
           email: email.trim(),
           phone: phone.trim(),
           year,
+          transfer,
           major: major.trim(),
           gender: effectiveGender,
           race,
@@ -228,13 +229,22 @@ export default function ApplicationForm() {
         </div>
 
         <div className="apply-field">
-          <label>Graduation Year</label>
+          <label>Year</label>
           <select value={year} onChange={e => setYear(e.target.value)}>
-            <option value="" disabled>Choose your graduation year:</option>
-            {[0, 1, 2, 3].map(offset => (
-              <option key={offset} value={String(currentYear + offset)}>{currentYear + offset}</option>
+            <option value="" disabled>Choose your year:</option>
+            {['Freshman', 'Sophomore', 'Junior', 'Senior'].map(y => (
+              <option key={y} value={y}>{y}</option>
             ))}
           </select>
+          {errors.year && <p className="apply-warning">{errors.year}</p>}
+          <label className="flex items-center gap-2 mt-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={transfer}
+              onChange={e => setTransfer(e.target.checked)}
+            />
+            I am a transfer student
+          </label>
         </div>
 
         <div className="apply-field">

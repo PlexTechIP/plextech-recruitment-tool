@@ -38,7 +38,8 @@ const ApplicantSchema = new Schema({
   last_name:      { type: String, required: true },
   email:          { type: String, default: null },
   phone:          { type: String, default: null },
-  year:           { type: String, default: null },
+  year:           { type: String, default: null },  // Freshman | Sophomore | Junior | Senior (legacy rows: grad year e.g. "2027")
+  transfer:       { type: Boolean, default: false },
   major:          { type: String, default: null },
   gender:         { type: String, default: null },
   race:           { type: [String], default: [] },

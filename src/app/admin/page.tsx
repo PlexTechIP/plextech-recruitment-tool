@@ -200,13 +200,16 @@ export default function AdminPage() {
     }
   }, [selectedCycle, loadPrompts])
 
-  // Only reset deadline input when switching to a different cycle
+  // Only reset deadline input when switching to a different cycle.
+  // datetime-local inputs expect LOCAL wall-clock time, so format manually —
+  // toISOString() would render UTC and show a time shifted by the tz offset.
   useEffect(() => {
     if (selectedCycle?.id === prevCycleIdRef.current) return
     prevCycleIdRef.current = selectedCycle?.id ?? null
-    setDeadlineInput(selectedCycle?.application_deadline
-      ? new Date(selectedCycle.application_deadline).toISOString().slice(0, 16)
-      : '')
+    if (!selectedCycle?.application_deadline) { setDeadlineInput(''); return }
+    const d = new Date(selectedCycle.application_deadline)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    setDeadlineInput(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
   }, [selectedCycle])
 
   // Load grading progress or interview form URL when round changes
@@ -659,9 +662,13 @@ export default function AdminPage() {
     const data: Applicant[] = await fetch(`/api/cycles/${cycleId}/applicants`).then(r => r.json())
     if (!data) return
     const counts: Record<string, number> = { total: data.length, freshman: 0, sophomore: 0, junior: 0, senior: 0, male: 0, female: 0, other: 0 }
-    const yearMap: Record<string, string> = { [String(new Date().getFullYear())]: 'senior', [String(new Date().getFullYear()+1)]: 'junior', [String(new Date().getFullYear()+2)]: 'sophomore', [String(new Date().getFullYear()+3)]: 'freshman' }
+    // Legacy applicants stored a graduation year instead of a class-year label
+    const legacyYearMap: Record<string, string> = { [String(new Date().getFullYear())]: 'senior', [String(new Date().getFullYear()+1)]: 'junior', [String(new Date().getFullYear()+2)]: 'sophomore', [String(new Date().getFullYear()+3)]: 'freshman' }
     for (const app of data) {
-      const yr = yearMap[app.year ?? '']
+      const raw = app.year ?? ''
+      const yr = ['Freshman', 'Sophomore', 'Junior', 'Senior'].includes(raw)
+        ? raw.toLowerCase()
+        : legacyYearMap[raw]
       if (yr) counts[yr]++
       const g = (app.gender ?? '').toLowerCase()
       if (g === 'male') counts.male++
@@ -695,10 +702,20 @@ export default function AdminPage() {
       ]
 
       const createdIds: string[] = []
+      const skipped: string[] = []
+
+      // Roles that already have an active session are skipped, not fatal —
+      // this lets Start Deliberation be re-run to fill in a missing track.
+      const existingSessions: { role: string | null; status: string }[] =
+        await fetch(`/api/sessions?round_id=${selectedRound.id}`).then(r => r.ok ? r.json() : []).catch(() => [])
+      const rolesWithSession = new Set(
+        existingSessions.filter(s => s.status === 'active').map(s => s.role)
+      )
 
       for (const split of roleSplits) {
+        if (rolesWithSession.has(split.role)) { skipped.push(`${split.label} (already exists)`); continue }
         const filtered = evaluated.filter(ev => split.match(ev.desired_roles))
-        if (!filtered.length) continue
+        if (!filtered.length) { skipped.push(`${split.label} (no graded applicants)`); continue }
 
         const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
         const sessionName = `${selectedCycle.name} — ${selectedRound.name} (${split.label})`
@@ -750,11 +767,20 @@ export default function AdminPage() {
         createdIds.push(`${split.label}: ${sessionId}`)
       }
 
-      if (!createdIds.length) throw new Error('No applicants matched curriculum or developer roles.')
+      if (!createdIds.length) {
+        throw new Error(`No sessions created. ${skipped.length ? 'Skipped: ' + skipped.join(', ') : 'No applicants matched curriculum or developer roles.'}`)
+      }
 
       await updateRoundStatus(selectedRound, 'deliberating')
 
-      setDelibMessage(`Sessions created — ${createdIds.join(', ')}`)
+      // Refresh session buttons in the round header
+      const refreshed = await fetch(`/api/sessions?round_id=${selectedRound.id}`).then(r => r.ok ? r.json() : []).catch(() => [])
+      if (Array.isArray(refreshed)) setRoundSessions(refreshed)
+
+      setDelibMessage(
+        `Sessions created — ${createdIds.join(', ')}` +
+        (skipped.length ? ` · Skipped: ${skipped.join(', ')}` : '')
+      )
     } catch (err: unknown) {
       setDelibMessage(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
@@ -1100,13 +1126,13 @@ export default function AdminPage() {
                       </button>
                     )
                   })}
-                  {selectedRound.grading_type === 'rubric' && roundSessions.some(s => !s.role) && (
+                  {selectedRound.grading_type === 'rubric' && roundSessions.length > 0 && (
                     <button
                       onClick={resplitRoundByRole}
                       className="text-xs px-3 py-1.5 rounded-lg border font-medium bg-red-500/10 border-red-500/40 text-red-300 hover:bg-red-500/20 transition-colors"
-                      title="Delete the current session(s) and re-create them as separate Curriculum + Developer deliberations based on each applicant's selected role."
+                      title="Delete the current session(s) and re-create them as separate Curriculum + Developer deliberations based on each applicant's selected role. All votes and notes in the current sessions are lost."
                     >
-                      Re-split by Role ⟳
+                      Rebuild Sessions ⟳
                     </button>
                   )}
                 </div>

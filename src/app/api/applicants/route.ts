@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
   const first_name = String(body.first_name ?? '').trim().slice(0, 100)
   const last_name = String(body.last_name ?? '').trim().slice(0, 100)
   const phone = String(body.phone ?? '').trim().slice(0, 30)
-  const year = String(body.year ?? '').trim().slice(0, 10)
+  const VALID_YEARS = ['Freshman', 'Sophomore', 'Junior', 'Senior']
+  const year = VALID_YEARS.includes(body.year) ? body.year : ''
+  const transfer = body.transfer === true
   const major = String(body.major ?? '').trim().slice(0, 200)
   const gender = String(body.gender ?? '').trim().slice(0, 100)
   const race: string[] = Array.isArray(body.race)
@@ -67,7 +69,7 @@ export async function POST(req: NextRequest) {
   }
 
   const applicant = await Applicant.create({
-    cycle_id, first_name, last_name, email, phone, year, major, gender,
+    cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
     race, desired_roles, linkedin, website, time_commitment, resume_base64,
   })
   const applicantId = applicant._id.toString()

@@ -34,6 +34,7 @@ export interface Vote {
   id: string
   candidate_id: string
   voter_name: string
+  voter_email: string | null // null on votes cast before email tracking
   vote_type: VoteType
 }
 
@@ -97,7 +98,8 @@ export interface Applicant {
   last_name: string
   email: string | null
   phone: string | null
-  year: string | null
+  year: string | null // Freshman | Sophomore | Junior | Senior (legacy rows: grad year e.g. "2027")
+  transfer: boolean | null
   major: string | null
   gender: string | null
   race: string[] | null

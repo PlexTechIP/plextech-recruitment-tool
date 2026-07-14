@@ -13,8 +13,10 @@ const DEV_WEIGHTS: Record<Quality, number> = {
   r6: 0.070588, r7: 0.10588, r8: 0.070588, r9: 0.070588, r0: 0.05,
 }
 
-// Update each semester
+// Earlier class years get a bigger bonus. Legacy grad-year keys kept for
+// applicants stored before the switch to class-year labels.
 const YEAR_BONUS: Record<string, number> = {
+  'Freshman': 0.03, 'Sophomore': 0.02, 'Junior': 0.01, 'Senior': 0,
   '2025': 0, '2026': 0.01, '2027': 0.02, '2028': 0.03,
 }
 

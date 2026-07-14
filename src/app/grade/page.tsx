@@ -412,7 +412,7 @@ export default function GradePage() {
 
           {/* Applicant metadata */}
           <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5 space-y-3">
-            <Field label="Graduation Year" value={applicant.year ?? 'N/A'} />
+            <Field label="Year" value={`${applicant.year ?? 'N/A'}${applicant.transfer ? ' (Transfer)' : ''}`} />
             <Field label="Major" value={applicant.major ?? 'N/A'} />
             <Field label="Desired Role" value={applicant.desired_roles ?? 'Not specified'} />
             {essayConfirmed && (
