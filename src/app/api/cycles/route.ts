@@ -4,15 +4,20 @@ import { RecruitmentCycle } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET() {
-  const auth = await requireRole('grader')
-  if (auth instanceof NextResponse) return auth
-
   await connectDB()
   await RecruitmentCycle.updateMany(
     { accepting_applications: true, application_deadline: { $lte: new Date() } },
     { $set: { accepting_applications: false } }
   )
-  const cycles = await RecruitmentCycle.find().sort({ created_at: -1 }).lean()
+
+  // The public application portal (/apply) needs this endpoint to find the open
+  // cycle, and applicants have no accounts — so unauthenticated callers get only
+  // cycles currently accepting applications. Members see the full history.
+  const auth = await requireRole('grader')
+  const isMember = !(auth instanceof NextResponse)
+
+  const filter = isMember ? {} : { status: 'active', accepting_applications: true }
+  const cycles = await RecruitmentCycle.find(filter).sort({ created_at: -1 }).lean()
   return NextResponse.json(cycles.map(c => ({ ...c, id: c._id.toString(), _id: undefined })))
 }
 
