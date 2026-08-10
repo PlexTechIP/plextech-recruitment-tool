@@ -34,6 +34,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const { data: authSession, status: authStatus } = useSession()
 
   const [session, setSession] = useState<Session | null>(null)
+  const [banned, setBanned] = useState(false)
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [votes, setVotes] = useState<Vote[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,6 +64,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       fetch(`/api/session-members?session_id=${sessionId}`),
     ])
 
+    // 403 from the session endpoint means this user has been banned.
+    if (sessionRes.status === 403) { setBanned(true); return }
     const sessionData = sessionRes.ok ? await sessionRes.json() : null
     const rawCands: Candidate[] = candidatesRes.ok ? await candidatesRes.json() : []
     const membersData = membersRes.ok ? await membersRes.json() : []
@@ -205,6 +208,22 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 
   if (authStatus === 'loading' || loading) {
     return <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center"><div className="text-gray-500 text-sm">Loading...</div></div>
+  }
+  if (banned) {
+    return (
+      <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center px-6">
+        <div className="text-center space-y-3 max-w-sm">
+          <p className="text-red-400 font-semibold">You have been removed from this session.</p>
+          <p className="text-sm text-[var(--text-muted)]">Contact the session creator if you think this is a mistake.</p>
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="text-sm px-4 py-2 rounded-lg bg-[var(--bg-raised)] border border-[var(--border)] text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-colors"
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
+      </div>
+    )
   }
   if (!session) {
     return <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center"><div className="text-red-400">Session not found.</div></div>
@@ -606,7 +625,12 @@ function CandidateDetail({
           {flags.length > 0 && (
             <div>
               <p className="text-xs font-medium text-red-400 mb-1">Red Flags ({flags.length})</p>
-              <p className="text-sm text-[var(--text-secondary)]">{anonymous ? `${flags.length} member(s)` : flags.map(v => v.voter_name).join(', ')}</p>
+              {/* Red flags stay anonymous to everyone but the session creator. */}
+              <p className="text-sm text-[var(--text-secondary)]">
+                {anonymous || !isAdmin
+                  ? `${flags.length} member(s)`
+                  : flags.map(v => v.voter_name).join(', ')}
+              </p>
             </div>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { SessionMember } from '@/lib/models'
+import { SessionMember, SessionBan } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -28,6 +28,15 @@ export async function POST(req: NextRequest) {
   const emailToAdd = (auth.role === 'grader' || !user_email)
     ? auth.email
     : String(user_email).toLowerCase()
+
+  // Banned emails cannot (re)join, no matter who is adding them.
+  const banned = await SessionBan.exists({ session_id, email: emailToAdd })
+  if (banned) {
+    return NextResponse.json(
+      { error: 'This email is banned from the session.' },
+      { status: 403 },
+    )
+  }
 
   await SessionMember.findOneAndUpdate(
     { session_id, user_email: emailToAdd },

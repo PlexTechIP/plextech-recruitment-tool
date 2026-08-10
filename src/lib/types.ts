@@ -42,6 +42,7 @@ export interface CandidateNote {
   id: string
   candidate_id: string
   author: string
+  author_email: string | null // null on notes created before email tracking
   content: string
   created_at: string
   type: 'note' | 'red_flag'
@@ -51,6 +52,14 @@ export interface SessionMember {
   session_id: string
   user_email: string
   joined_at: string
+}
+
+export interface SessionBan {
+  id: string
+  session_id: string
+  email: string
+  banned_by: string
+  banned_at: string
 }
 
 // ============================================================

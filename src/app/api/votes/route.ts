@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Vote, Candidate, SessionMember } from '@/lib/models'
+import { Vote, Candidate, SessionMember, Session as SessionModel } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -12,7 +12,26 @@ export async function GET(req: NextRequest) {
   const candidate_ids = searchParams.get('candidate_ids')?.split(',').filter(Boolean) ?? []
   if (!candidate_ids.length) return NextResponse.json([])
   const votes = await Vote.find({ candidate_id: { $in: candidate_ids } }).lean()
-  return NextResponse.json(votes.map(v => ({ ...v, id: v._id.toString(), candidate_id: v.candidate_id.toString(), _id: undefined })))
+
+  // Red flags are anonymous to everyone but the session creator. Redact on the
+  // server so identities aren't recoverable from the network response. A user's
+  // own flag is left intact so the UI can still show their toggle state.
+  // Defaults to false (more anonymous) if the lookup fails for any reason.
+  let isCreator = false
+  try {
+    const first = await Candidate.findById(candidate_ids[0]).select('session_id').lean()
+    const session = first ? await SessionModel.findById(first.session_id).select('created_by').lean() : null
+    isCreator = !!session && session.created_by?.toLowerCase() === auth.email.toLowerCase()
+  } catch { /* keep isCreator = false */ }
+
+  return NextResponse.json(votes.map(v => {
+    const base = { ...v, id: v._id.toString(), candidate_id: v.candidate_id.toString(), _id: undefined }
+    const isMine = !!v.voter_email && v.voter_email.toLowerCase() === auth.email.toLowerCase()
+    if (v.vote_type === 'red_flag' && !isCreator && !isMine) {
+      return { ...base, voter_name: 'Anonymous', voter_email: null }
+    }
+    return base
+  }))
 }
 
 export async function POST(req: NextRequest) {

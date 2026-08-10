@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Round, GraderAssignment, Review, Session, Candidate, Vote, CandidateNote, SessionMember } from '@/lib/models'
+import { Round, GraderAssignment, Review, Session, Candidate, Vote, CandidateNote, SessionMember, SessionBan } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -54,6 +54,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     Review.deleteMany({ round_id: id }),
     sessionIds.length ? Session.deleteMany({ _id: { $in: sessionIds } }) : Promise.resolve(),
     sessionIds.length ? SessionMember.deleteMany({ session_id: { $in: sessionIds } }) : Promise.resolve(),
+    sessionIds.length ? SessionBan.deleteMany({ session_id: { $in: sessionIds } }) : Promise.resolve(),
     sessionIds.length ? Candidate.deleteMany({ session_id: { $in: sessionIds } }) : Promise.resolve(),
     candidateIds.length ? Vote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),
     candidateIds.length ? CandidateNote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),

@@ -156,7 +156,8 @@ export const Vote = models.Vote || model('Vote', VoteSchema)
 // ─── Candidate Notes ─────────────────────────────────────────
 const CandidateNoteSchema = new Schema({
   candidate_id: { type: Schema.Types.ObjectId, ref: 'Candidate', required: true },
-  author:       { type: String, required: true },
+  author:       { type: String, required: true },                 // display name (UI)
+  author_email: { type: String, default: null, lowercase: true }, // owner (auth); null on legacy rows
   content:      { type: String, required: true },
   type:         { type: String, enum: ['note', 'red_flag'], default: 'note' },
   created_at:   { type: Date, default: Date.now },
@@ -171,6 +172,17 @@ const SessionMemberSchema = new Schema({
 })
 SessionMemberSchema.index({ session_id: 1, user_email: 1 }, { unique: true })
 export const SessionMember = models.SessionMember || model('SessionMember', SessionMemberSchema)
+
+// ─── Session Bans ────────────────────────────────────────────
+// Emails barred from joining a specific deliberation session.
+const SessionBanSchema = new Schema({
+  session_id: { type: String, ref: 'Session', required: true },
+  email:      { type: String, required: true, lowercase: true },
+  banned_by:  { type: String, required: true, lowercase: true },
+  banned_at:  { type: Date, default: Date.now },
+})
+SessionBanSchema.index({ session_id: 1, email: 1 }, { unique: true })
+export const SessionBan = models.SessionBan || model('SessionBan', SessionBanSchema)
 
 // helper: convert mongoose doc to plain object with id string
 export function toJSON<T>(doc: mongoose.Document & T): T & { id: string } {

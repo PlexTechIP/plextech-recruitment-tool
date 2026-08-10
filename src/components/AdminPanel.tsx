@@ -11,7 +11,7 @@ interface Props {
 }
 
 export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
-  const [tab, setTab] = useState<'session' | 'emails'>('session')
+  const [tab, setTab] = useState<'session' | 'members' | 'emails'>('session')
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
   const [ending, setEnding] = useState(false)
@@ -35,9 +35,56 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
   const [bulkEmails, setBulkEmails] = useState('')
   const [showBulk, setShowBulk] = useState(false)
 
+  // Session member + ban state
+  const [members, setMembers] = useState<{ user_email: string }[]>([])
+  const [bans, setBans] = useState<{ id: string; email: string; banned_by: string }[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [banInput, setBanInput] = useState('')
+  const [banError, setBanError] = useState('')
+
   useEffect(() => {
     if (tab === 'emails') loadEmails()
-  }, [tab])
+    if (tab === 'members') loadMembersAndBans()
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadMembersAndBans() {
+    setMembersLoading(true)
+    const [mRes, bRes] = await Promise.all([
+      fetch(`/api/session-members?session_id=${sessionId}`),
+      fetch(`/api/session-bans?session_id=${sessionId}`),
+    ])
+    setMembers(mRes.ok ? await mRes.json() : [])
+    setBans(bRes.ok ? await bRes.json() : [])
+    setMembersLoading(false)
+  }
+
+  async function banEmail(email: string) {
+    const target = email.trim().toLowerCase()
+    setBanError('')
+    if (!target.includes('@')) { setBanError('Enter a valid email address.'); return }
+    const res = await fetch('/api/session-bans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, email: target }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      setBanError(err?.error ?? 'Failed to ban.')
+      return
+    }
+    setBanInput('')
+    await loadMembersAndBans()
+    await onRefresh()
+  }
+
+  async function unbanEmail(email: string) {
+    await fetch('/api/session-bans', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, email }),
+    })
+    await loadMembersAndBans()
+  }
 
   async function loadEmails() {
     setEmailsLoading(true)
@@ -264,6 +311,12 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
             Session
           </button>
           <button
+            onClick={() => setTab('members')}
+            className={`flex-1 py-2 text-xs font-medium transition-colors ${tab === 'members' ? 'text-[var(--text-primary)] border-b-2 border-[#FF6B35]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
+          >
+            Members
+          </button>
+          <button
             onClick={() => setTab('emails')}
             className={`flex-1 py-2 text-xs font-medium transition-colors ${tab === 'emails' ? 'text-[var(--text-primary)] border-b-2 border-[#FF6B35]' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}
           >
@@ -393,6 +446,90 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
                 </div>
               )}
 
+            </div>
+          ) : tab === 'members' ? (
+            <div className="p-4 space-y-4">
+              <p className="text-xs text-gray-500">
+                Banning removes someone from this session and blocks them from rejoining. It does not affect their access to other sessions.
+              </p>
+
+              {/* Ban by email */}
+              <form
+                onSubmit={e => { e.preventDefault(); banEmail(banInput) }}
+                className="flex gap-2"
+              >
+                <input
+                  type="email"
+                  value={banInput}
+                  onChange={e => { setBanInput(e.target.value); setBanError('') }}
+                  placeholder="email@berkeley.edu"
+                  className="flex-1 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-red-500/60"
+                />
+                <button
+                  type="submit"
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-red-500/15 border border-red-500/40 text-red-300 hover:bg-red-500/25 transition-colors"
+                >
+                  Ban
+                </button>
+              </form>
+              {banError && <p className="text-xs text-red-400">{banError}</p>}
+
+              {membersLoading ? (
+                <p className="text-xs text-[var(--text-muted)]">Loading…</p>
+              ) : (
+                <>
+                  {/* Current members */}
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+                      In session ({members.length})
+                    </p>
+                    {members.length === 0 && (
+                      <p className="text-xs text-[var(--text-muted)]">No one has joined yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isCreator = m.user_email?.toLowerCase() === session.created_by?.toLowerCase()
+                      return (
+                        <div key={m.user_email} className="flex items-center justify-between gap-2 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2">
+                          <span className="text-xs text-[var(--text-primary)] truncate">
+                            {m.user_email}
+                            {isCreator && <span className="ml-1 text-[var(--text-muted)]">(creator)</span>}
+                          </span>
+                          {!isCreator && (
+                            <button
+                              onClick={() => {
+                                if (confirm(`Ban ${m.user_email} from this session?`)) banEmail(m.user_email)
+                              }}
+                              className="text-xs px-2 py-1 rounded text-red-400 hover:bg-red-500/15 transition-colors shrink-0"
+                            >
+                              Ban
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Banned list */}
+                  {bans.length > 0 && (
+                    <div className="space-y-1 pt-2 border-t border-[var(--border)]">
+                      <p className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider">
+                        Banned ({bans.length})
+                      </p>
+                      {bans.map(b => (
+                        <div key={b.id} className="flex items-center justify-between gap-2 bg-red-500/5 border border-red-500/25 rounded-lg px-3 py-2">
+                          <span className="text-xs text-red-300 truncate">{b.email}</span>
+                          <button
+                            onClick={() => unbanEmail(b.email)}
+                            className="text-xs px-2 py-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-colors shrink-0"
+                          >
+                            Unban
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           ) : (
             <div className="p-4 space-y-4">

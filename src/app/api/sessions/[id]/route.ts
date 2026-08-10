@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Session, Candidate, Vote, CandidateNote, SessionMember } from '@/lib/models'
+import { Session, Candidate, Vote, CandidateNote, SessionMember, SessionBan } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -11,6 +11,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params
   const session = await Session.findById(id).lean()
   if (!session) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  // Banned users can't open the session at all.
+  const banned = await SessionBan.exists({ session_id: id, email: auth.email })
+  if (banned) {
+    return NextResponse.json({ error: 'You have been removed from this session.' }, { status: 403 })
+  }
+
   return NextResponse.json({ ...session, id: session._id, round_id: session.round_id?.toString() ?? null, _id: undefined })
 }
 
@@ -60,6 +67,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   await Promise.all([
     Session.findByIdAndDelete(id),
     SessionMember.deleteMany({ session_id: id }),
+    SessionBan.deleteMany({ session_id: id }),
     Candidate.deleteMany({ session_id: id }),
     candidateIds.length ? Vote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),
     candidateIds.length ? CandidateNote.deleteMany({ candidate_id: { $in: candidateIds } }) : Promise.resolve(),
