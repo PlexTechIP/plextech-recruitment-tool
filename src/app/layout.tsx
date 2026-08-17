@@ -1,17 +1,6 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import SessionProvider from "@/components/SessionProvider";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Login | PlexTech - Berkeley",
@@ -27,7 +16,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className="h-full antialiased"
     >
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -36,17 +25,17 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: `
           try {
             var t = localStorage.getItem('theme');
-            if (t === 'light') {
+            if (t !== 'dark') {
               var el = document.documentElement;
               el.setAttribute('data-theme', 'light');
-              el.style.setProperty('--bg-base',        '#f7f6ff');
+              el.style.setProperty('--bg-base',        '#fffaf6');
               el.style.setProperty('--bg-surface',     '#ffffff');
-              el.style.setProperty('--bg-raised',      '#eeedf8');
-              el.style.setProperty('--bg-active',      '#e2e0f0');
-              el.style.setProperty('--border',         '#d8d5ee');
-              el.style.setProperty('--text-primary',   '#18101e');
-              el.style.setProperty('--text-secondary', '#374151');
-              el.style.setProperty('--text-muted',     '#6b7280');
+              el.style.setProperty('--bg-raised',      '#fff3ec');
+              el.style.setProperty('--bg-active',      '#ffe5d7');
+              el.style.setProperty('--border',         '#eadfd8');
+              el.style.setProperty('--text-primary',   '#241b2b');
+              el.style.setProperty('--text-secondary', '#514759');
+              el.style.setProperty('--text-muted',     '#7d7282');
             }
           } catch(e) {}
         `}} />

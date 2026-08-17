@@ -2,11 +2,11 @@
 import { useEffect, useState } from 'react'
 
 export default function ThemeToggle() {
-  const [isDark, setIsDark] = useState(true)
+  const [isDark, setIsDark] = useState(false)
 
   useEffect(() => {
     const stored = localStorage.getItem('theme')
-    const dark = stored !== 'light'
+    const dark = stored === 'dark'
     setIsDark(dark)
     applyTheme(dark)
   }, [])
@@ -15,23 +15,23 @@ export default function ThemeToggle() {
     const el = document.documentElement
     el.setAttribute('data-theme', dark ? 'dark' : 'light')
     if (dark) {
-      el.style.setProperty('--bg-base',        '#0a0a0f')
-      el.style.setProperty('--bg-surface',     '#0f0f1a')
-      el.style.setProperty('--bg-raised',      '#1a1a2e')
-      el.style.setProperty('--bg-active',      '#252545')
-      el.style.setProperty('--border',         '#1e2035')
-      el.style.setProperty('--text-primary',   '#ededed')
-      el.style.setProperty('--text-secondary', '#d1d5db')
-      el.style.setProperty('--text-muted',     '#6b7280')
+      el.style.setProperty('--bg-base',        '#140f18')
+      el.style.setProperty('--bg-surface',     '#1d1623')
+      el.style.setProperty('--bg-raised',      '#2a1f31')
+      el.style.setProperty('--bg-active',      '#3b2a45')
+      el.style.setProperty('--border',         '#403247')
+      el.style.setProperty('--text-primary',   '#fff8f3')
+      el.style.setProperty('--text-secondary', '#e7dce9')
+      el.style.setProperty('--text-muted',     '#a99dac')
     } else {
-      el.style.setProperty('--bg-base',        '#f7f6ff')
+      el.style.setProperty('--bg-base',        '#fffaf6')
       el.style.setProperty('--bg-surface',     '#ffffff')
-      el.style.setProperty('--bg-raised',      '#eeedf8')
-      el.style.setProperty('--bg-active',      '#e2e0f0')
-      el.style.setProperty('--border',         '#d8d5ee')
-      el.style.setProperty('--text-primary',   '#18101e')
-      el.style.setProperty('--text-secondary', '#374151')
-      el.style.setProperty('--text-muted',     '#6b7280')
+      el.style.setProperty('--bg-raised',      '#fff3ec')
+      el.style.setProperty('--bg-active',      '#ffe5d7')
+      el.style.setProperty('--border',         '#eadfd8')
+      el.style.setProperty('--text-primary',   '#241b2b')
+      el.style.setProperty('--text-secondary', '#514759')
+      el.style.setProperty('--text-muted',     '#7d7282')
     }
   }
 

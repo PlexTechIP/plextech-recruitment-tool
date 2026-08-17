@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { Applicant, EssayResponse, RecruitmentCycle } from '@/lib/models'
+import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 
 const VALID_RACES = [
   'American Indian or Alaska Native',
@@ -15,6 +16,10 @@ const VALID_RACES = [
 const VALID_ROLES = ['Curriculum Student', 'Industry Developer']
 
 export async function POST(req: NextRequest) {
+  if (!APPLICATIONS_LAUNCHED) {
+    return NextResponse.json({ error: 'Applications are not open yet.' }, { status: 403 })
+  }
+
   await connectDB()
   const body = await req.json()
   const { essays } = body
