@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 
 interface Cycle { id: string; name: string; status: string; accepting_applications: boolean; application_deadline: string | null }
 
@@ -21,7 +22,7 @@ export default function ApplyHome() {
       })
   }, [])
 
-  const accepting = cycle?.accepting_applications ?? false
+  const accepting = APPLICATIONS_LAUNCHED && (cycle?.accepting_applications ?? false)
 
   return (
     <div className="apply-page">
@@ -39,7 +40,7 @@ export default function ApplyHome() {
           </>
         ) : (
           <h4 style={{ color: '#ec6f34' }}>
-            Applications are closed for {cycle?.name ?? 'this semester'}. Thank you for your interest in PlexTech!
+            Our Fall 2026 application is underway and will be available soon. Please check back!
           </h4>
         )}
 

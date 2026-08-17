@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 
 const RACE_OPTIONS = [
   'American Indian or Alaska Native',
@@ -56,6 +57,11 @@ export default function ApplicationForm() {
   const [alreadyApplied, setAlreadyApplied] = useState(false)
 
   useEffect(() => {
+    if (!APPLICATIONS_LAUNCHED) {
+      router.replace('/apply')
+      return
+    }
+
     async function load() {
       const res = await fetch('/api/cycles')
       const cycles: Cycle[] = await res.json()
