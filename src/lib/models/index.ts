@@ -176,6 +176,22 @@ const CandidateNoteSchema = new Schema({
 })
 export const CandidateNote = models.CandidateNote || model('CandidateNote', CandidateNoteSchema)
 
+// ─── Imported Coffee Chat Notes ─────────────────────────────
+// Cycle-scoped so one import is available in every deliberation round.
+const CoffeeChatNoteSchema = new Schema({
+  cycle_id:       { type: Schema.Types.ObjectId, ref: 'RecruitmentCycle', required: true },
+  applicant_id:   { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
+  applicant_name: { type: String, required: true },
+  chatter_name:   { type: String, required: true },
+  notes:          { type: String, default: '' },
+  chat_date:      { type: String, default: null }, // YYYY-MM-DD; date-only avoids timezone shifts
+  other_notes:    { type: String, default: null },
+  imported_by:    { type: String, required: true, lowercase: true },
+  imported_at:    { type: Date, default: Date.now },
+})
+CoffeeChatNoteSchema.index({ cycle_id: 1, applicant_id: 1, chat_date: 1 })
+export const CoffeeChatNote = models.CoffeeChatNote || model('CoffeeChatNote', CoffeeChatNoteSchema)
+
 // ─── Session Members ─────────────────────────────────────────
 const SessionMemberSchema = new Schema({
   session_id: { type: String, ref: 'Session', required: true },

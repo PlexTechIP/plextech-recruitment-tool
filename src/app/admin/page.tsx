@@ -28,6 +28,25 @@ const STATUS_COLOR: Record<RoundStatus, string> = {
   ended:         'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)]',
 }
 
+type CoffeeChatPreview = {
+  header_row: number
+  source_rows: number
+  coffee_chat_rows: number
+  matched_rows: {
+    source_row: number
+    applicant_id: string
+    applicant_name: string
+    chatter_name: string
+    notes: string
+    chat_date: string | null
+    other_notes: string | null
+  }[]
+  issues: { row: number; applicant_name: string; reason: string }[]
+}
+
+const normalizeName = (value: string) =>
+  value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ')
+
 // ─── main page ───────────────────────────────────────────────
 export default function AdminPage() {
   const router = useRouter()
@@ -92,6 +111,13 @@ export default function AdminPage() {
   const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; texts: Record<string, string>; avg: number }[] | null>(null)
   const [interviewImporting, setInterviewImporting] = useState(false)
   const [interviewMessage, setInterviewMessage] = useState('')
+
+  // Cycle-wide coffee chat CSV import
+  const coffeeChatFileRef = useRef<HTMLInputElement>(null)
+  const [coffeeChatCsvText, setCoffeeChatCsvText] = useState('')
+  const [coffeeChatPreview, setCoffeeChatPreview] = useState<CoffeeChatPreview | null>(null)
+  const [coffeeChatLoading, setCoffeeChatLoading] = useState(false)
+  const [coffeeChatMessage, setCoffeeChatMessage] = useState('')
 
   // ── auth ─────────────────────────────────────────────────
   useEffect(() => {
@@ -197,6 +223,9 @@ export default function AdminPage() {
       setInterviewMessage('')
       setInterviewPreview(null)
       setInterviewCsvText('')
+      setCoffeeChatMessage('')
+      setCoffeeChatPreview(null)
+      setCoffeeChatCsvText('')
     }
   }, [selectedCycle, loadPrompts])
 
@@ -636,12 +665,23 @@ export default function AdminPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
       })
-      const candidates = interviewPreview.map((c, idx) => ({
+      const cycleApplicants: Applicant[] = await fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json())
+      const applicantsByName = new Map<string, Applicant[]>()
+      for (const applicant of cycleApplicants) {
+        const key = normalizeName(`${applicant.first_name} ${applicant.last_name}`)
+        applicantsByName.set(key, [...(applicantsByName.get(key) ?? []), applicant])
+      }
+
+      const candidates = interviewPreview.map((c, idx) => {
+        const matches = applicantsByName.get(normalizeName(c.name)) ?? []
+        return {
         session_id: sessionId,
+        applicant_id: matches.length === 1 ? matches[0].id : null,
         name: c.name,
         status: 'pending',
         data: { score: c.avg, candidate_number: idx + 1, ...c.scores, ...c.texts },
-      }))
+        }
+      })
       await fetch(`/api/sessions/${sessionId}/candidates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -654,6 +694,58 @@ export default function AdminPage() {
       setInterviewMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`)
     } finally {
       setInterviewImporting(false)
+    }
+  }
+
+  // ── coffee chat CSV import ───────────────────────────────
+  async function previewCoffeeChats() {
+    if (!selectedCycle || !coffeeChatCsvText.trim()) return
+    setCoffeeChatLoading(true)
+    setCoffeeChatMessage('')
+    setCoffeeChatPreview(null)
+    try {
+      const res = await fetch('/api/coffee-chat-notes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle_id: selectedCycle.id, csv_text: coffeeChatCsvText, action: 'preview' }),
+      })
+      const data = await res.json()
+      if (data.preview) setCoffeeChatPreview(data.preview)
+      if (!res.ok) throw new Error(data.error ?? 'Could not preview coffee-chat CSV.')
+      setCoffeeChatMessage(`${data.preview.matched_rows.length} coffee chats matched successfully.`)
+    } catch (error) {
+      setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setCoffeeChatLoading(false)
+    }
+  }
+
+  async function importCoffeeChats() {
+    if (!selectedCycle || !coffeeChatPreview || coffeeChatPreview.issues.length > 0) return
+    const confirmed = confirm(
+      `Replace all imported coffee-chat notes for ${selectedCycle.name} with ` +
+      `${coffeeChatPreview.matched_rows.length} rows from this CSV?`,
+    )
+    if (!confirmed) return
+
+    setCoffeeChatLoading(true)
+    setCoffeeChatMessage('')
+    try {
+      const res = await fetch('/api/coffee-chat-notes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle_id: selectedCycle.id, csv_text: coffeeChatCsvText, action: 'commit' }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (data.preview) setCoffeeChatPreview(data.preview)
+        throw new Error(data.error ?? 'Coffee-chat import failed.')
+      }
+      setCoffeeChatMessage(`Imported ${data.imported} coffee chats for ${data.applicants} applicants.`)
+    } catch (error) {
+      setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setCoffeeChatLoading(false)
     }
   }
 
@@ -1373,6 +1465,118 @@ export default function AdminPage() {
                     </div>
                   </>
                 )}
+
+                {/* Cycle-wide coffee chat import (shared by application + interview deliberations) */}
+                <div className="pt-3 border-t border-[var(--border)] space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Import Coffee Chat Notes</p>
+                    <p className="text-xs text-[var(--text-muted)] mt-1">
+                      Upload or paste the coffee-chat CSV. A successful import replaces the coffee-chat dataset for {selectedCycle?.name} and appears in every deliberation round in this cycle.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => coffeeChatFileRef.current?.click()}
+                      className="text-sm px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                    >
+                      Upload CSV
+                    </button>
+                    <input
+                      ref={coffeeChatFileRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="hidden"
+                      onChange={async e => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        const text = await file.text()
+                        setCoffeeChatCsvText(text)
+                        setCoffeeChatPreview(null)
+                        setCoffeeChatMessage('')
+                        if (coffeeChatFileRef.current) coffeeChatFileRef.current.value = ''
+                      }}
+                    />
+                  </div>
+                  <textarea
+                    value={coffeeChatCsvText}
+                    onChange={e => {
+                      setCoffeeChatCsvText(e.target.value)
+                      setCoffeeChatPreview(null)
+                      setCoffeeChatMessage('')
+                    }}
+                    placeholder="Or paste coffee-chat CSV here..."
+                    rows={4}
+                    className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35] resize-none"
+                  />
+                  <button
+                    onClick={previewCoffeeChats}
+                    disabled={coffeeChatLoading || !coffeeChatCsvText.trim()}
+                    className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {coffeeChatLoading ? 'Checking CSV...' : 'Preview Coffee Chats'}
+                  </button>
+
+                  {coffeeChatPreview && (
+                    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60 p-3 space-y-3">
+                      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--text-muted)]">
+                        <span>Header row: {coffeeChatPreview.header_row}</span>
+                        <span>Coffee chats: {coffeeChatPreview.coffee_chat_rows}</span>
+                        <span>Matched: {coffeeChatPreview.matched_rows.length}</span>
+                        <span className={coffeeChatPreview.issues.length ? 'text-red-400' : 'text-green-400'}>
+                          Issues: {coffeeChatPreview.issues.length}
+                        </span>
+                      </div>
+
+                      {coffeeChatPreview.issues.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          {coffeeChatPreview.issues.map(issue => (
+                            <p key={`${issue.row}-${issue.applicant_name}-${issue.reason}`} className="text-xs text-red-400">
+                              Row {issue.row}{issue.applicant_name ? ` · ${issue.applicant_name}` : ''}: {issue.reason}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
+                      {coffeeChatPreview.issues.length === 0 && coffeeChatPreview.matched_rows.length > 0 && (
+                        <>
+                          <div className="max-h-44 overflow-y-auto rounded-md border border-[var(--border)]">
+                            <table className="w-full text-xs">
+                              <thead className="bg-[var(--bg-raised)] sticky top-0">
+                                <tr>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Applicant</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Coffee chatter</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Date</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--border)]">
+                                {coffeeChatPreview.matched_rows.map(row => (
+                                  <tr key={row.source_row}>
+                                    <td className="px-3 py-1.5 text-[var(--text-primary)]">{row.applicant_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-secondary)]">{row.chatter_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-muted)]">{row.chat_date ?? '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <button
+                            onClick={importCoffeeChats}
+                            disabled={coffeeChatLoading}
+                            className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer disabled:cursor-not-allowed"
+                          >
+                            {coffeeChatLoading ? 'Importing...' : 'Replace Cycle Coffee Chats'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {coffeeChatMessage && (
+                    <p className={`text-sm ${coffeeChatMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                      {coffeeChatMessage}
+                    </p>
+                  )}
+                </div>
 
                 {/* ── Delib-only round ── */}
                 {!selectedRound.grading_type && (

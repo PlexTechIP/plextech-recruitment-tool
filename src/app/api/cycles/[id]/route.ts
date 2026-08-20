@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { RecruitmentCycle, EssayPrompt } from '@/lib/models'
+import { RecruitmentCycle, EssayPrompt, CoffeeChatNote } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -28,7 +28,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   await connectDB()
   const { id } = await params
   await RecruitmentCycle.findByIdAndDelete(id)
-  await EssayPrompt.deleteMany({ cycle_id: id })
+  await Promise.all([
+    EssayPrompt.deleteMany({ cycle_id: id }),
+    CoffeeChatNote.deleteMany({ cycle_id: id }),
+  ])
   return NextResponse.json({ ok: true })
 }
 

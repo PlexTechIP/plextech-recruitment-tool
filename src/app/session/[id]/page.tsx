@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, use } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
-import { Session, Candidate, Vote, VoteType, CandidateNote } from '@/lib/types'
+import { Session, Candidate, Vote, VoteType, CandidateNote, CoffeeChatNote } from '@/lib/types'
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
 
@@ -416,6 +416,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             </div>
           ) : (
             <CandidateDetail
+              key={selected.id}
               candidate={selected}
               votes={votesFor(selected.id)}
               myName={myName}
@@ -547,14 +548,18 @@ function CandidateDetail({
   const flags = votes.filter(v => v.vote_type === 'red_flag')
 
   const [notes, setNotes] = useState<CandidateNote[]>([])
+  const [coffeeChats, setCoffeeChats] = useState<CoffeeChatNote[]>([])
+  const [coffeeChatsOpen, setCoffeeChatsOpen] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    setNotes([])
     fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotes(data))
+    fetch(`/api/coffee-chat-notes?candidate_id=${candidate.id}`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => setCoffeeChats(Array.isArray(data) ? data : []))
   }, [candidate.id])
 
   async function deleteNote(noteId: string) {
@@ -590,6 +595,56 @@ function CandidateDetail({
 
       {/* Dynamic fields from data JSON */}
       <DataFields data={candidate.data} />
+
+      {coffeeChats.length > 0 && (
+        <div className="mb-6 rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5 overflow-hidden">
+          <div className="px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Coffee chats</p>
+            <p className="text-sm text-[var(--text-secondary)] mt-1">
+              <span className="font-medium text-[var(--text-primary)]">Coffee chatters:</span>{' '}
+              {[...new Set(coffeeChats.map(chat => chat.chatter_name))].join(', ')}
+            </p>
+            <button
+              type="button"
+              onClick={() => setCoffeeChatsOpen(open => !open)}
+              className="mt-2 text-sm font-medium text-[#FF6B35] hover:opacity-80 transition-opacity cursor-pointer"
+              aria-expanded={coffeeChatsOpen}
+            >
+              {coffeeChatsOpen ? 'Hide coffee chat notes' : `View coffee chat notes (${coffeeChats.length})`}
+            </button>
+          </div>
+
+          {coffeeChatsOpen && (
+            <div className="border-t border-[#FF6B35]/20 px-4 py-3 space-y-3">
+              {coffeeChats.map(chat => (
+                <div key={chat.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <p className="text-sm font-semibold text-[var(--text-primary)]">{chat.chatter_name}</p>
+                    {chat.chat_date && (
+                      <span className="text-xs text-[var(--text-muted)] shrink-0">
+                        {new Date(`${chat.chat_date}T00:00:00`).toLocaleDateString('en-US', {
+                          month: 'short', day: 'numeric', year: 'numeric',
+                        })}
+                      </span>
+                    )}
+                  </div>
+                  {chat.notes && (
+                    <p className="text-sm leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap break-words">
+                      {chat.notes}
+                    </p>
+                  )}
+                  {chat.other_notes && (
+                    <div className="mt-2 pt-2 border-t border-[var(--border)]">
+                      <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">Other notes</p>
+                      <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap break-words">{chat.other_notes}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Vote actions */}
       {sessionActive && (
