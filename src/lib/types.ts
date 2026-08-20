@@ -48,6 +48,19 @@ export interface CandidateNote {
   type: 'note' | 'red_flag'
 }
 
+export interface CoffeeChatNote {
+  id: string
+  cycle_id: string
+  applicant_id: string
+  applicant_name: string
+  chatter_name: string
+  notes: string
+  chat_date: string | null
+  other_notes: string | null
+  imported_by: string
+  imported_at: string
+}
+
 export interface SessionMember {
   session_id: string
   user_email: string

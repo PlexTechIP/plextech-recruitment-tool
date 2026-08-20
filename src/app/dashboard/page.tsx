@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { getCurrentUser, canCreateSession, canManageUsers, CurrentUser } from '@/lib/auth'
@@ -214,7 +215,14 @@ export default function Dashboard() {
     <main className="min-h-screen bg-[var(--bg-base)] flex flex-col">
       <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="plex-gradient-text text-xs font-bold uppercase tracking-widest">PlexTech</span>
+          <Image
+            src="/PlexTechLogo.png"
+            alt="PlexTech"
+            width={23}
+            height={34}
+            className="h-8 w-auto shrink-0"
+            priority
+          />
           <span className="text-[var(--border)]">|</span>
           <h1 className="font-bold text-[var(--text-primary)]">Deliberations</h1>
         </div>
