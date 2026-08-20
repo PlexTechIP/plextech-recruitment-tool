@@ -15,7 +15,6 @@ export const authOptions: AuthOptions = {
       if (!user.email) return false
       await connectDB()
       const found = await AuthorizedUser.findOne({ email: user.email.toLowerCase() })
-      console.log('[NextAuth signIn] email:', user.email, '| found:', !!found)
       return !!found
     },
     async session({ session }) {

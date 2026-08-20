@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, use } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import { Session, Candidate, Vote, VoteType, CandidateNote } from '@/lib/types'
@@ -254,12 +255,19 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }
 
   return (
-    <div className="h-screen bg-[var(--bg-base)] flex flex-col overflow-hidden">
+    <div className="deliberation-portal h-screen bg-[var(--bg-base)] flex flex-col overflow-hidden">
       {/* Header */}
       <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex items-center justify-between shrink-0">
         <div className="min-w-0 flex items-center gap-3">
-          <span className="plex-gradient-text text-xs font-bold uppercase tracking-widest hidden sm:block">PlexTech</span>
-          <span className="hidden sm:block text-[var(--border)]">|</span>
+          <Image
+            src="/PlexTechLogo.png"
+            alt="PlexTech"
+            width={23}
+            height={34}
+            className="h-8 w-auto shrink-0"
+            priority
+          />
+          <span className="h-6 w-px bg-[var(--border)]" aria-hidden="true" />
           <div className="min-w-0">
             <h1 className="font-bold text-[var(--text-primary)] truncate">{session.name}</h1>
             <p className="text-xs text-gray-500">

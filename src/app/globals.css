@@ -68,6 +68,27 @@ body {
   box-shadow: var(--shadow-soft);
 }
 
+/* Deliberation needs clearer working surfaces than the marketing-style portal.
+   Keep the brand warmth, but give the queue, controls, and detail panel enough
+   separation to make long review sessions easier on the eyes. */
+:root:not([data-theme="dark"]) .deliberation-portal {
+  --bg-base:        #efeae6;
+  --bg-surface:     #fcfaf8;
+  --bg-raised:      #e7ddd6;
+  --bg-active:      #dfd0c5;
+  --border:         #d3c3b9;
+  --text-primary:   #2d2527;
+  --text-secondary: #584b4d;
+  --text-muted:     #76686b;
+  --shadow-soft:    0 12px 32px rgba(75, 53, 45, 0.08);
+}
+
+:root:not([data-theme="dark"]) .deliberation-portal {
+  background-image:
+    radial-gradient(circle at 92% 0%, rgba(255, 131, 61, 0.10), transparent 28rem),
+    linear-gradient(145deg, #f4f0ec 0%, #ebe4de 100%);
+}
+
 button, a, input, textarea, select {
   transition-duration: 180ms;
 }

@@ -4,7 +4,7 @@ import { AuthorizedUser } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireRole('leadership')
+  const auth = await requireRole('admin')
   if (auth instanceof NextResponse) return auth
 
   await connectDB()
@@ -23,7 +23,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireRole('leadership')
+  const auth = await requireRole('admin')
   if (auth instanceof NextResponse) return auth
 
   await connectDB()
