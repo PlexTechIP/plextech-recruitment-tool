@@ -4,7 +4,7 @@ import { AuthorizedUser } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET() {
-  const auth = await requireRole('leadership')
+  const auth = await requireRole('admin')
   if (auth instanceof NextResponse) return auth
 
   await connectDB()
@@ -13,7 +13,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireRole('leadership')
+  const auth = await requireRole('admin')
   if (auth instanceof NextResponse) return auth
 
   await connectDB()

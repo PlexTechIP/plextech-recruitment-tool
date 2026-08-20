@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { getCurrentUser, canCreateSession, canManageUsers, CurrentUser } from '@/lib/auth'
-import { Session, AuthorizedUser, UserRole } from '@/lib/types'
+import { Session, AuthorizedUser, Round, UserRole } from '@/lib/types'
 import ThemeToggle from '@/components/ThemeToggle'
 
 export default function Dashboard() {
@@ -70,8 +70,19 @@ export default function Dashboard() {
             fetch(`/api/grader-assignments?grader_email=${encodeURIComponent(user.email)}`).then(r => r.json()),
             fetch(`/api/reviews?grader_email=${encodeURIComponent(user.email)}`).then(r => r.json()),
           ])
-          const assigned: number = Array.isArray(assignments) ? assignments.length : 0
-          const reviewed: number = Array.isArray(reviews) ? reviews.length : 0
+
+          const assignmentRows: { round_id: string; applicant_id: string }[] = Array.isArray(assignments) ? assignments : []
+          const reviewRows: { round_id: string; applicant_id: string }[] = Array.isArray(reviews) ? reviews : []
+          const roundIds = [...new Set(assignmentRows.map(assignment => assignment.round_id))]
+          const rounds = (await Promise.all(
+            roundIds.map(id => fetch(`/api/rounds/${id}`).then(r => r.ok ? r.json() : null))
+          )).filter(Boolean) as Round[]
+          const activeRoundIds = new Set(
+            rounds.filter(round => round.status === 'grading').map(round => round.id)
+          )
+
+          const assigned = assignmentRows.filter(assignment => activeRoundIds.has(assignment.round_id)).length
+          const reviewed = reviewRows.filter(review => activeRoundIds.has(review.round_id)).length
           setPendingGrading(Math.max(0, assigned - reviewed))
         })(),
       ])
@@ -205,7 +216,7 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <span className="plex-gradient-text text-xs font-bold uppercase tracking-widest">PlexTech</span>
           <span className="text-[var(--border)]">|</span>
-          <h1 className="font-bold text-[var(--text-primary)]">Delib Tool</h1>
+          <h1 className="font-bold text-[var(--text-primary)]">Deliberations</h1>
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${ROLE_BADGE[user.role]}`}>

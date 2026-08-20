@@ -108,8 +108,9 @@ export default function GradePage() {
     const roundResults = await Promise.all(
       roundIds.map(id => fetch(`/api/rounds/${id}`).then(r => r.ok ? r.json() : null))
     )
-    const rounds = roundResults.filter(Boolean) as Round[]
-    rounds.sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+    const rounds = (roundResults.filter(Boolean) as Round[])
+      .filter(round => round.status === 'grading')
+      .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
 
     // Fetch the cycle name for each unique cycle_id touched by these rounds
     const cycleIds = [...new Set(rounds.map(r => r.cycle_id).filter(Boolean))]
@@ -128,11 +129,13 @@ export default function GradePage() {
 
     setRoundSummaries(summaries)
 
-    // Auto-select if only one round with pending work
+    // Closed and deliberating rounds stay out of the grading queue.
+    // Auto-select only an active grading round when it is the sole pending one.
     const pending = summaries.filter(s => s.completed < s.total)
-    if (pending.length === 1) {
-      setSelectedRoundId(pending[0].round.id)
-    }
+    setSelectedRoundId(current => {
+      if (current && summaries.some(s => s.round.id === current)) return current
+      return pending.length === 1 ? pending[0].round.id : null
+    })
 
     setLoadingRounds(false)
   }

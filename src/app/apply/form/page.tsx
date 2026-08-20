@@ -327,8 +327,12 @@ export default function ApplicationForm() {
                 onChange={e => {
                   const file = e.target.files?.[0]
                   if (!file) return
-                  if (file.size > 5 * 1024 * 1024) {
-                    setErrors(prev => ({ ...prev, resume: 'Max file size is 5MB.' }))
+                  if (file.type !== 'application/pdf') {
+                    setResumeFile(null)
+                    setErrors(prev => ({ ...prev, resume: 'Please choose a PDF file.' }))
+                  } else if (file.size > 3 * 1024 * 1024) {
+                    setResumeFile(null)
+                    setErrors(prev => ({ ...prev, resume: 'Max file size is 3MB.' }))
                   } else {
                     setResumeFile(file)
                     setErrors(prev => ({ ...prev, resume: '' }))

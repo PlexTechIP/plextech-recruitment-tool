@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, EssayResponse, RecruitmentCycle } from '@/lib/models'
+import { Applicant, EssayPrompt, EssayResponse, RecruitmentCycle } from '@/lib/models'
 import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
+import { consumePublicRateLimit } from '@/lib/rateLimit'
+
+const MAX_REQUEST_BYTES = 4_300_000
+const MAX_RESUME_BYTES = 3 * 1024 * 1024
 
 const VALID_RACES = [
   'American Indian or Alaska Native',
@@ -20,7 +24,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Applications are not open yet.' }, { status: 403 })
   }
 
+  const contentLength = Number(req.headers.get('content-length') ?? 0)
+  if (contentLength > MAX_REQUEST_BYTES) {
+    return NextResponse.json({ error: 'Submission is too large. Resume PDFs must be 3MB or smaller.' }, { status: 413 })
+  }
+
   await connectDB()
+  if (!await consumePublicRateLimit(req, 'application-submit', 10, 60 * 60 * 1000)) {
+    return NextResponse.json(
+      { error: 'Too many submission attempts. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': '3600' } },
+    )
+  }
+
   const body = await req.json()
   const { essays } = body
 
@@ -41,14 +57,27 @@ export async function POST(req: NextRequest) {
   const linkedin = body.linkedin ? String(body.linkedin).trim().slice(0, 500) : null
   const website = body.website ? String(body.website).trim().slice(0, 500) : null
   const time_commitment = String(body.time_commitment ?? '').trim().slice(0, 3000)
-  const resume_base64 = typeof body.resume_base64 === 'string' ? body.resume_base64 : null
+  const resume_base64 = typeof body.resume_base64 === 'string' ? body.resume_base64.trim() : null
   const cycle_id = String(body.cycle_id ?? '').trim()
 
   if (!email || !first_name || !last_name || !cycle_id) {
     return NextResponse.json({ error: 'Missing required fields.' }, { status: 400 })
   }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+    return NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 })
+  }
   if (!VALID_ROLES.includes(desired_roles)) {
     return NextResponse.json({ error: 'Invalid role.' }, { status: 400 })
+  }
+  if (!resume_base64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(resume_base64)) {
+    return NextResponse.json({ error: 'A valid PDF resume is required.' }, { status: 400 })
+  }
+  const resumeBytes = Buffer.from(resume_base64, 'base64')
+  if (resumeBytes.length === 0 || resumeBytes.length > MAX_RESUME_BYTES) {
+    return NextResponse.json({ error: 'Resume PDFs must be 3MB or smaller.' }, { status: 413 })
+  }
+  if (resumeBytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    return NextResponse.json({ error: 'The uploaded resume must be a PDF.' }, { status: 400 })
   }
 
   // Enforce that the cycle is actively accepting applications and the deadline (if set) hasn't passed.
@@ -73,14 +102,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'An application with this email already exists for this cycle.' }, { status: 409 })
   }
 
-  const applicant = await Applicant.create({
-    cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
-    race, desired_roles, linkedin, website, time_commitment, resume_base64,
-  })
+  const submittedEssays = Array.isArray(essays) ? essays : []
+  const promptIds = submittedEssays
+    .filter((e: unknown) => e && typeof e === 'object' && 'prompt_id' in (e as object))
+    .map((e: { prompt_id: string }) => String(e.prompt_id))
+  const [validPromptCount, expectedPromptCount] = await Promise.all([
+    EssayPrompt.countDocuments({ cycle_id, _id: { $in: promptIds } }),
+    EssayPrompt.countDocuments({ cycle_id }),
+  ])
+  if (
+    promptIds.length !== new Set(promptIds).size
+    || validPromptCount !== promptIds.length
+    || promptIds.length !== expectedPromptCount
+  ) {
+    return NextResponse.json({ error: 'Invalid essay prompt data.' }, { status: 400 })
+  }
+
+  let applicant
+  try {
+    applicant = await Applicant.create({
+      cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
+      race, desired_roles, linkedin, website, time_commitment, resume_base64,
+    })
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error && 'code' in error && error.code === 11000) {
+      return NextResponse.json({ error: 'An application with this email already exists for this cycle.' }, { status: 409 })
+    }
+    throw error
+  }
   const applicantId = applicant._id.toString()
 
-  if (essays && Array.isArray(essays) && essays.length > 0) {
-    const rows = essays
+  if (submittedEssays.length > 0) {
+    const rows = submittedEssays
       .filter((e: unknown) => e && typeof e === 'object' && 'prompt_id' in (e as object))
       .map((e: { prompt_id: string; response: string }) => ({
         applicant_id: applicantId,

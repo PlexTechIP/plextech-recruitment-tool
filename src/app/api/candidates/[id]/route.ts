@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Candidate, Vote, CandidateNote } from '@/lib/models'
+import { Candidate, Vote, CandidateNote, Session } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -10,6 +10,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   await connectDB()
   const { id } = await params
   const body = await req.json()
+
+  const existing = await Candidate.findById(id).select('session_id').lean()
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const session = await Session.findById(existing.session_id).select('created_by status').lean()
+  const isOwner = session?.created_by?.toLowerCase() === auth.email.toLowerCase()
+  if (!isOwner && auth.role !== 'admin') {
+    return NextResponse.json({ error: 'Only the session creator can update decisions.' }, { status: 403 })
+  }
+  if (session?.status !== 'active') {
+    return NextResponse.json({ error: 'This session has ended.' }, { status: 409 })
+  }
 
   const allowed: Record<string, unknown> = {}
   const fields = ['name', 'status', 'data'] as const

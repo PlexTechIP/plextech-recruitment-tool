@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Review, GraderAssignment } from '@/lib/models'
+import { Review, GraderAssignment, Round } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -45,6 +45,14 @@ export async function POST(req: NextRequest) {
 
   if (!body.round_id || !body.applicant_id) {
     return NextResponse.json({ error: 'round_id and applicant_id are required.' }, { status: 400 })
+  }
+
+  // A closed or deliberating round must not accept new grading work, even if a
+  // grader still has an old assignment link open.
+  const round = await Round.findById(body.round_id).select('status').lean()
+  if (!round) return NextResponse.json({ error: 'Round not found.' }, { status: 404 })
+  if (round.status !== 'grading') {
+    return NextResponse.json({ error: 'This grading round is closed.' }, { status: 409 })
   }
 
   // Ensure the grader is actually assigned to this applicant for this round —

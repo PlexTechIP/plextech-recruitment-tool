@@ -50,7 +50,19 @@ const ApplicantSchema = new Schema({
   resume_base64:  { type: String, default: null },  // base64-encoded PDF
   created_at:     { type: Date, default: Date.now },
 })
+ApplicantSchema.index({ cycle_id: 1, email: 1 }, { unique: true })
 export const Applicant = models.Applicant || model('Applicant', ApplicantSchema)
+
+// ─── Public API Rate Limits ──────────────────────────────────
+// One document per HMAC-hashed client/window. MongoDB makes increments atomic,
+// and the TTL index clears expired buckets automatically.
+const RateLimitSchema = new Schema({
+  _id:        { type: String },
+  count:      { type: Number, required: true, default: 0 },
+  expires_at: { type: Date, required: true },
+}, { _id: false })
+RateLimitSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 })
+export const RateLimit = models.RateLimit || model('RateLimit', RateLimitSchema)
 
 // ─── Essay Responses ─────────────────────────────────────────
 const EssayResponseSchema = new Schema({

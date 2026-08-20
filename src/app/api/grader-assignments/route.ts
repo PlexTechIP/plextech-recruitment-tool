@@ -10,12 +10,13 @@ export async function GET(req: NextRequest) {
   await connectDB()
   const { searchParams } = new URL(req.url)
   const round_id = searchParams.get('round_id') ?? undefined
-  const grader_email = searchParams.get('grader_email') ?? undefined
+  let grader_email = searchParams.get('grader_email') ?? undefined
 
   // Graders can only fetch their own assignments
   if (auth.role === 'grader' && grader_email && grader_email.toLowerCase() !== auth.email.toLowerCase()) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+  if (auth.role === 'grader') grader_email = auth.email
 
   const filter: Record<string, string> = {}
   if (round_id) filter.round_id = round_id

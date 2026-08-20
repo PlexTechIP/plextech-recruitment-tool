@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { Applicant, RecruitmentCycle } from '@/lib/models'
+import { consumePublicRateLimit } from '@/lib/rateLimit'
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -21,6 +22,12 @@ export async function GET(req: NextRequest) {
   }
 
   await connectDB()
+  if (!await consumePublicRateLimit(req, 'application-duplicate-check', 60, 60 * 60 * 1000)) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': '3600' } },
+    )
+  }
 
   // Only confirm existence for cycles currently accepting applications. This
   // narrows enumeration to the active application window where the user could

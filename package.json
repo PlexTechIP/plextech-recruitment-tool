@@ -2,6 +2,9 @@
   "name": "delib-tool",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev --port 5173",
     "build": "next build",
@@ -9,11 +12,10 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@auth/mongodb-adapter": "^3.11.2",
     "@types/papaparse": "^5.5.2",
-    "mongoose": "^9.6.1",
-    "next": "16.2.3",
-    "next-auth": "^4.24.14",
+    "mongoose": "^9.9.3",
+    "next": "16.3.1",
+    "next-auth": "^4.24.15",
     "papaparse": "^5.5.3",
     "react": "19.2.4",
     "react-dom": "19.2.4"
