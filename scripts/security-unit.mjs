@@ -46,6 +46,7 @@ async function responseBody(result) {
 
 async function main() {
   const validationModule = await loadTypeScriptModule('src/lib/apiValidation.ts')
+  const emailModule = await loadTypeScriptModule('src/lib/emailValidation.ts')
   const pdfModule = await loadTypeScriptModule('src/lib/pdfValidation.ts')
   const validation = validationModule.module
   const {
@@ -57,6 +58,7 @@ async function main() {
     readJsonObject,
   } = validation
   const { validateResumePdf } = pdfModule.module
+  const { isBerkeleyEmail, normalizeBerkeleyEmail } = emailModule.module
 
   try {
     const valid = await readJsonObject(jsonRequest({ name: 'PlexTech', nested: { ok: true } }))
@@ -113,6 +115,12 @@ async function main() {
     assert.equal(isSessionId('../BAD'), false)
     assert.equal(isEmail('student@berkeley.edu'), true)
     assert.equal(isEmail('student@berkeley.edu\nattacker@example.com'), false)
+    assert.equal(isBerkeleyEmail('student@berkeley.edu'), true)
+    assert.equal(isBerkeleyEmail('student@BERKELEY.EDU'), true)
+    assert.equal(isBerkeleyEmail('student@gmail.com'), false)
+    assert.equal(isBerkeleyEmail('student@berkeley.edu.attacker.example'), false)
+    assert.equal(isBerkeleyEmail('student@berkeley.edu\nattacker@example.com'), false)
+    assert.equal(normalizeBerkeleyEmail(' Student@BERKELEY.EDU '), 'student@berkeley.edu')
     assert.equal(normalizeHttpUrl('javascript:alert(1)'), null)
     assert.equal(normalizeHttpUrl('https://user:pass@example.com'), null)
     assert.equal(normalizeHttpUrl('https://example.com/path'), 'https://example.com/path')
@@ -140,7 +148,7 @@ async function main() {
 
     console.log('Security unit checks passed.')
   } finally {
-    await Promise.all([validationModule.cleanup(), pdfModule.cleanup()])
+    await Promise.all([validationModule.cleanup(), emailModule.cleanup(), pdfModule.cleanup()])
   }
 }
 

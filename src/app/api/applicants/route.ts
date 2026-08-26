@@ -4,7 +4,8 @@ import { connectDB } from '@/lib/mongodb'
 import { Applicant, EssayPrompt, EssayResponse, RecruitmentCycle } from '@/lib/models'
 import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 import { consumePublicRateLimit, consumeUserRateLimit } from '@/lib/rateLimit'
-import { isEmail, isNonEmptyString, isObjectId, isPlainRecord, normalizeHttpUrl, readJsonObject } from '@/lib/apiValidation'
+import { isNonEmptyString, isObjectId, isPlainRecord, normalizeHttpUrl, readJsonObject } from '@/lib/apiValidation'
+import { normalizeBerkeleyEmail } from '@/lib/emailValidation'
 import { requireApplicantAuth } from '@/lib/serverAuth'
 import { validateResumePdf } from '@/lib/pdfValidation'
 
@@ -63,11 +64,7 @@ export async function POST(req: NextRequest) {
   const { essays } = body
 
   // Whitelist and validate all applicant fields
-  const submittedEmail = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-  if (submittedEmail && submittedEmail !== applicantAuth.email) {
-    return NextResponse.json({ error: 'The application email must match your signed-in Google account.' }, { status: 403 })
-  }
-  const email = applicantAuth.email
+  const email = normalizeBerkeleyEmail(body.email)
   const first_name = typeof body.first_name === 'string' ? body.first_name.trim() : ''
   const last_name = typeof body.last_name === 'string' ? body.last_name.trim() : ''
   const phone = typeof body.phone === 'string' ? body.phone.trim() : ''
@@ -86,9 +83,11 @@ export async function POST(req: NextRequest) {
   const resume_base64 = typeof body.resume_base64 === 'string' ? body.resume_base64.trim() : null
   const cycle_id = String(body.cycle_id ?? '').trim()
 
+  if (!email) {
+    return NextResponse.json({ error: 'Email must be a @berkeley.edu address.' }, { status: 400 })
+  }
   if (
-    !isEmail(email)
-    || !isNonEmptyString(first_name, 100)
+    !isNonEmptyString(first_name, 100)
     || !isNonEmptyString(last_name, 100)
     || phone.length < 7
     || phone.length > 30
@@ -178,7 +177,7 @@ export async function POST(req: NextRequest) {
       const [applicant] = await Applicant.create([{
         cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
         race, desired_roles, linkedin, website, time_commitment, resume_base64,
-        identity_provider: 'google-berkeley',
+        identity_provider: 'google',
         identity_verified_at: new Date(),
       }], { session })
       applicantId = applicant._id.toString()
