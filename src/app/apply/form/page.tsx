@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { signIn, useSession } from 'next-auth/react'
 import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
+import { isBerkeleyEmail } from '@/lib/emailValidation'
 
 const RACE_OPTIONS = [
   'American Indian or Alaska Native',
@@ -28,6 +29,7 @@ interface ApplicationDraft {
   fields: {
     firstName: string
     lastName: string
+    email: string
     phone: string
     year: string
     transfer: boolean
@@ -77,6 +79,7 @@ function parseApplicationDraft(raw: string): ApplicationDraft | null {
     if (
       typeof candidate.firstName !== 'string'
       || typeof candidate.lastName !== 'string'
+      || (candidate.email !== undefined && typeof candidate.email !== 'string')
       || typeof candidate.phone !== 'string'
       || typeof candidate.year !== 'string'
       || typeof candidate.transfer !== 'boolean'
@@ -92,7 +95,9 @@ function parseApplicationDraft(raw: string): ApplicationDraft | null {
       || typeof candidate.commitments !== 'string'
     ) return null
 
-    return draft as ApplicationDraft
+    const parsedDraft = draft as ApplicationDraft
+    if (typeof candidate.email !== 'string') parsedDraft.fields.email = ''
+    return parsedDraft
   } catch {
     return null
   }
@@ -115,7 +120,7 @@ export default function ApplicationForm() {
   const router = useRouter()
   const { data: authSession, status: authStatus } = useSession()
   const applicantVerified = (authSession?.user as { applicantVerified?: boolean } | undefined)?.applicantVerified === true
-  const email = authSession?.user?.email?.trim().toLowerCase() ?? ''
+  const authEmail = authSession?.user?.email?.trim().toLowerCase() ?? ''
   const [cycle, setCycle] = useState<Cycle | null>(null)
   const [prompts, setPrompts] = useState<EssayPrompt[]>([])
   const [loadError, setLoadError] = useState('')
@@ -124,6 +129,7 @@ export default function ApplicationForm() {
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+  const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [year, setYear] = useState('')
   const [transfer, setTransfer] = useState(false)
@@ -144,7 +150,7 @@ export default function ApplicationForm() {
   const [draftMessage, setDraftMessage] = useState('')
   const submittedRef = useRef(false)
   const latestDraftRef = useRef<{ key: string; value: string } | null>(null)
-  const draftKey = cycle && email ? draftStorageKey(cycle.id, email) : ''
+  const draftKey = cycle && authEmail ? draftStorageKey(cycle.id, authEmail) : ''
 
   useEffect(() => {
     if (!APPLICATIONS_LAUNCHED) {
@@ -209,6 +215,7 @@ export default function ApplicationForm() {
         const draft = raw ? parseApplicationDraft(raw) : null
         if (!draft || draft.cycleId !== cycle.id || draft.expiresAt <= Date.now()) {
           if (raw) window.localStorage.removeItem(draftKey)
+          setEmail(current => current || (authEmail.endsWith('@berkeley.edu') ? authEmail : ''))
           setDraftMessage('')
         } else {
           const validAnswerKeys = new Set(prompts.map(prompt => `answer_${prompt.id}`))
@@ -217,6 +224,7 @@ export default function ApplicationForm() {
           )
           setFirstName(draft.fields.firstName)
           setLastName(draft.fields.lastName)
+          setEmail(draft.fields.email || (authEmail.endsWith('@berkeley.edu') ? authEmail : ''))
           setPhone(draft.fields.phone)
           setYear(['Freshman', 'Sophomore', 'Junior', 'Senior'].includes(draft.fields.year) ? draft.fields.year : '')
           setTransfer(draft.fields.transfer)
@@ -238,7 +246,7 @@ export default function ApplicationForm() {
     }, 0)
 
     return () => window.clearTimeout(restoreTimeout)
-  }, [cycle, draftKey, draftReadyKey, prompts])
+  }, [authEmail, cycle, draftKey, draftReadyKey, prompts])
 
   useEffect(() => {
     if (!cycle || !draftKey || draftReadyKey !== draftKey || submittedRef.current) return
@@ -252,6 +260,7 @@ export default function ApplicationForm() {
       fields: {
         firstName,
         lastName,
+        email,
         phone,
         year,
         transfer,
@@ -286,6 +295,7 @@ export default function ApplicationForm() {
     draftReadyKey,
     firstName,
     lastName,
+    email,
     phone,
     year,
     transfer,
@@ -331,7 +341,7 @@ export default function ApplicationForm() {
     const e: Record<string, string> = {}
     if (!firstName.trim()) e.firstName = 'required'
     if (!lastName.trim()) e.lastName = 'required'
-    if (!email.trim()) e.email = 'required'
+    if (!isBerkeleyEmail(email)) e.email = 'Must be a @berkeley.edu email.'
     if (!phone.trim()) e.phone = 'required'
     if (!year) e.year = 'required'
     if (!major.trim()) e.major = 'required'
@@ -495,12 +505,13 @@ export default function ApplicationForm() {
         </div>
 
         <div className="apply-field">
-          <label>Email</label>
+          <label>Berkeley Email</label>
           <input
             type="email"
             value={email}
-            readOnly
-            aria-readonly="true"
+            onChange={event => setEmail(event.target.value)}
+            autoComplete="email"
+            placeholder="name@berkeley.edu"
           />
           {errors.email && <p className="apply-warning">{errors.email}</p>}
         </div>

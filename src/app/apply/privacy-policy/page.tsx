@@ -10,8 +10,9 @@ export default function PrivacyPolicy() {
       <div className="apply-form-card" style={{ maxWidth: '700px' }}>
         <h2>PlexTech Application Platform — Privacy Policy</h2>
         <p style={{ color: 'grey', lineHeight: 1.7 }}>
-          To verify your email, the application uses Google sign-in and receives your
-          basic Google account identity. The form collects contact and academic information,
+          To authenticate you, the application uses Google sign-in and receives your
+          basic Google account identity. The form separately collects your required Berkeley email,
+          contact and academic information,
           optional demographic information, links you choose to provide, your resume, and your
           written responses.<br /><br />
           PlexTech uses this information only to administer recruitment, grading, and deliberations.

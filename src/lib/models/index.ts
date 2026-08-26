@@ -58,7 +58,7 @@ const ApplicantSchema = new Schema({
   email:          { type: String, required: true, lowercase: true, trim: true },
   // Intentionally nullable on legacy rows. Only submissions created after the
   // hardened Google flow carry verifiable provenance.
-  identity_provider:    { type: String, enum: ['google-berkeley', null], default: null },
+  identity_provider:    { type: String, enum: ['google', 'google-berkeley', null], default: null },
   identity_verified_at: { type: Date, default: null },
   phone:          { type: String, default: null },
   year:           { type: String, default: null },  // Freshman | Sophomore | Junior | Senior (legacy rows: grad year e.g. "2027")
