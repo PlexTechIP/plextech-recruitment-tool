@@ -20,6 +20,84 @@ const RACE_OPTIONS = [
 interface EssayPrompt { id: string; question_number: number; prompt: string; description: string | null }
 interface Cycle { id: string; name: string; accepting_applications: boolean; status: string; application_deadline: string | null }
 
+interface ApplicationDraft {
+  version: 1
+  cycleId: string
+  savedAt: number
+  expiresAt: number
+  fields: {
+    firstName: string
+    lastName: string
+    phone: string
+    year: string
+    transfer: boolean
+    major: string
+    gender: string
+    genderOther: string
+    race: string[]
+    role: string
+    linkedin: string
+    website: string
+    answers: Record<string, string>
+    commitments: string
+  }
+}
+
+const DRAFT_STORAGE_PREFIX = 'plextech-application-draft:v1'
+const DEFAULT_DRAFT_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+function draftStorageKey(cycleId: string, email: string) {
+  return `${DRAFT_STORAGE_PREFIX}:${cycleId}:${encodeURIComponent(email)}`
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && Object.values(value).every(entry => typeof entry === 'string')
+}
+
+function parseApplicationDraft(raw: string): ApplicationDraft | null {
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+    const draft = value as Partial<ApplicationDraft>
+    const fields = draft.fields
+    if (
+      draft.version !== 1
+      || typeof draft.cycleId !== 'string'
+      || typeof draft.savedAt !== 'number'
+      || typeof draft.expiresAt !== 'number'
+      || typeof fields !== 'object'
+      || fields === null
+      || Array.isArray(fields)
+    ) return null
+
+    const candidate = fields as Partial<ApplicationDraft['fields']>
+    if (
+      typeof candidate.firstName !== 'string'
+      || typeof candidate.lastName !== 'string'
+      || typeof candidate.phone !== 'string'
+      || typeof candidate.year !== 'string'
+      || typeof candidate.transfer !== 'boolean'
+      || typeof candidate.major !== 'string'
+      || typeof candidate.gender !== 'string'
+      || typeof candidate.genderOther !== 'string'
+      || !Array.isArray(candidate.race)
+      || candidate.race.some(entry => typeof entry !== 'string')
+      || typeof candidate.role !== 'string'
+      || typeof candidate.linkedin !== 'string'
+      || typeof candidate.website !== 'string'
+      || !isStringRecord(candidate.answers)
+      || typeof candidate.commitments !== 'string'
+    ) return null
+
+    return draft as ApplicationDraft
+  } catch {
+    return null
+  }
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -62,6 +140,11 @@ export default function ApplicationForm() {
   const [raceDropdownOpen, setRaceDropdownOpen] = useState(false)
   const raceRef = useRef<HTMLDivElement>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [draftReadyKey, setDraftReadyKey] = useState('')
+  const [draftMessage, setDraftMessage] = useState('')
+  const submittedRef = useRef(false)
+  const latestDraftRef = useRef<{ key: string; value: string } | null>(null)
+  const draftKey = cycle && email ? draftStorageKey(cycle.id, email) : ''
 
   useEffect(() => {
     if (!APPLICATIONS_LAUNCHED) {
@@ -115,6 +198,120 @@ export default function ApplicationForm() {
     void load()
     return () => { cancelled = true }
   }, [router, authStatus, applicantVerified])
+
+  useEffect(() => {
+    if (!cycle || !draftKey || draftReadyKey === draftKey) return
+
+    const restoreTimeout = window.setTimeout(() => {
+      submittedRef.current = false
+      try {
+        const raw = window.localStorage.getItem(draftKey)
+        const draft = raw ? parseApplicationDraft(raw) : null
+        if (!draft || draft.cycleId !== cycle.id || draft.expiresAt <= Date.now()) {
+          if (raw) window.localStorage.removeItem(draftKey)
+          setDraftMessage('Drafts save automatically in this browser. Your resume is not stored.')
+        } else {
+          const validAnswerKeys = new Set(prompts.map(prompt => `answer_${prompt.id}`))
+          const restoredAnswers = Object.fromEntries(
+            Object.entries(draft.fields.answers).filter(([key]) => validAnswerKeys.has(key)),
+          )
+          setFirstName(draft.fields.firstName)
+          setLastName(draft.fields.lastName)
+          setPhone(draft.fields.phone)
+          setYear(['Freshman', 'Sophomore', 'Junior', 'Senior'].includes(draft.fields.year) ? draft.fields.year : '')
+          setTransfer(draft.fields.transfer)
+          setMajor(draft.fields.major)
+          setGender(['Male', 'Female', 'Other'].includes(draft.fields.gender) ? draft.fields.gender : '')
+          setGenderOther(draft.fields.genderOther)
+          setRace(draft.fields.race.filter(option => RACE_OPTIONS.includes(option)))
+          setRole(['Curriculum Student', 'Industry Developer'].includes(draft.fields.role) ? draft.fields.role : '')
+          setLinkedin(draft.fields.linkedin)
+          setWebsite(draft.fields.website)
+          setAnswers(restoredAnswers)
+          setCommitments(draft.fields.commitments)
+          setDraftMessage('Draft restored from this browser. Please reattach your resume before submitting.')
+        }
+      } catch {
+        setDraftMessage('Local draft saving is unavailable in this browser. The form will still work normally.')
+      }
+      setDraftReadyKey(draftKey)
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimeout)
+  }, [cycle, draftKey, draftReadyKey, prompts])
+
+  useEffect(() => {
+    if (!cycle || !draftKey || draftReadyKey !== draftKey || submittedRef.current) return
+
+    const deadline = cycle.application_deadline ? new Date(cycle.application_deadline).getTime() : Number.NaN
+    const payload: ApplicationDraft = {
+      version: 1,
+      cycleId: cycle.id,
+      savedAt: Date.now(),
+      expiresAt: Number.isFinite(deadline) ? deadline : Date.now() + DEFAULT_DRAFT_TTL_MS,
+      fields: {
+        firstName,
+        lastName,
+        phone,
+        year,
+        transfer,
+        major,
+        gender,
+        genderOther,
+        race,
+        role,
+        linkedin,
+        website,
+        answers,
+        commitments,
+      },
+    }
+    const pendingDraft = { key: draftKey, value: JSON.stringify(payload) }
+    latestDraftRef.current = pendingDraft
+
+    const timeout = window.setTimeout(() => {
+      if (submittedRef.current) return
+      try {
+        window.localStorage.setItem(pendingDraft.key, pendingDraft.value)
+        setDraftMessage(`Draft saved locally at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Your resume is not stored.`)
+      } catch {
+        setDraftMessage('Local draft saving is unavailable in this browser. The form will still work normally.')
+      }
+    }, 500)
+
+    return () => window.clearTimeout(timeout)
+  }, [
+    cycle,
+    draftKey,
+    draftReadyKey,
+    firstName,
+    lastName,
+    phone,
+    year,
+    transfer,
+    major,
+    gender,
+    genderOther,
+    race,
+    role,
+    linkedin,
+    website,
+    answers,
+    commitments,
+  ])
+
+  useEffect(() => {
+    function flushDraft() {
+      if (submittedRef.current || !latestDraftRef.current) return
+      try {
+        window.localStorage.setItem(latestDraftRef.current.key, latestDraftRef.current.value)
+      } catch {
+        // The form remains usable when local storage is disabled or full.
+      }
+    }
+    window.addEventListener('pagehide', flushDraft)
+    return () => window.removeEventListener('pagehide', flushDraft)
+  }, [])
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -199,6 +396,15 @@ export default function ApplicationForm() {
       }
 
       const { id } = await res.json()
+      submittedRef.current = true
+      latestDraftRef.current = null
+      if (draftKey) {
+        try {
+          window.localStorage.removeItem(draftKey)
+        } catch {
+          // Submission succeeded even if browser storage cannot be cleared.
+        }
+      }
       router.push(`/apply/success?id=${id}&name=${encodeURIComponent(firstName)}`)
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : 'An unexpected error occurred. Please contact plextech@berkeley.edu.')
@@ -266,6 +472,9 @@ export default function ApplicationForm() {
           <h1>PlexTech Application — {cycle.name}</h1>
           <h4>Thank you for your interest in PlexTech!<br />Please fill out the information below and we will get back to you soon.</h4>
           <p>All applications submitted are final; duplicates will not be accepted.</p>
+          <p aria-live="polite" style={{ color: '#6b7280', fontSize: '0.9rem' }}>
+            {draftMessage || 'Drafts save automatically in this browser. Your resume is not stored.'}
+          </p>
           {cycle.application_deadline && (
             <p style={{ color: '#ec6f34' }}>
               Applications close on {new Date(cycle.application_deadline).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Los_Angeles' })} PT
