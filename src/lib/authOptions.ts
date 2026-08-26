@@ -16,23 +16,18 @@ export const authOptions: AuthOptions = {
       await connectDB()
       const email = user.email.trim().toLowerCase()
       const found = await AuthorizedUser.exists({ email })
-      const googleProfile = profile as { email_verified?: boolean; hd?: string } | undefined
-      const isVerifiedBerkeleyApplicant = googleProfile?.email_verified === true
-        && googleProfile.hd === 'berkeley.edu'
-        && email.endsWith('@berkeley.edu')
+      const googleProfile = profile as { email_verified?: boolean } | undefined
+      const isVerifiedGoogleApplicant = googleProfile?.email_verified === true
       // Authorized members use the internal tools. Applicants may authenticate
-      // with a Berkeley Google account solely to prove ownership of the email
+      // with any verified Google account solely to prove ownership of the email
       // used on their application; requireRole() still rejects sessions without
-      // an AuthorizedUser role from every protected API.
-      return !!found || isVerifiedBerkeleyApplicant
+      // an AuthorizedUser role from every protected internal API.
+      return !!found || isVerifiedGoogleApplicant
     },
     async jwt({ token, profile }) {
       if (profile) {
-        const googleProfile = profile as { email?: string; email_verified?: boolean; hd?: string }
-        const email = googleProfile.email?.trim().toLowerCase()
+        const googleProfile = profile as { email_verified?: boolean }
         token.applicantVerified = googleProfile.email_verified === true
-          && googleProfile.hd === 'berkeley.edu'
-          && !!email?.endsWith('@berkeley.edu')
       }
       return token
     },

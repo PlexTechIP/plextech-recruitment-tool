@@ -19,9 +19,9 @@ export async function requireApplicantAuth(): Promise<ApplicantSession | NextRes
   const session = await getServerSession(authOptions)
   const user = session?.user as ({ email?: string | null; applicantVerified?: boolean }) | undefined
   const email = user?.email?.trim().toLowerCase()
-  if (!email || user?.applicantVerified !== true || !email.endsWith('@berkeley.edu')) {
+  if (!email || user?.applicantVerified !== true) {
     return NextResponse.json(
-      { error: 'Sign in with your verified Berkeley Google account to apply.' },
+      { error: 'Sign in with a verified Google account to apply.' },
       { status: 401 },
     )
   }
