@@ -39,7 +39,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [votes, setVotes] = useState<Vote[]>([])
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<Candidate | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [memberCount, setMemberCount] = useState(0)
@@ -114,31 +114,42 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     if (authStatus === 'loading') return
     if (authStatus === 'unauthenticated') { router.replace('/'); return }
 
-    loadData().then(() => setLoading(false))
+    let cancelled = false
+    let interval: ReturnType<typeof setInterval> | undefined
 
-    const interval = setInterval(loadData, 3000)
-    return () => clearInterval(interval)
+    // Join before the first protected read. Previously these ran concurrently,
+    // causing intermittent 403s on a user's first visit.
+    async function bootstrap() {
+      const joinResponse = await fetch('/api/session-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      }).catch(() => null)
+      if (cancelled) return
+      if (joinResponse?.status === 403) {
+        setBanned(true)
+        setLoading(false)
+        return
+      }
+
+      await loadData()
+      if (cancelled) return
+      setLoading(false)
+      // Skip background tabs and use an 8-second refresh. User actions still
+      // refresh immediately, while this avoids a constant 3-second fan-out.
+      interval = setInterval(() => {
+        if (document.visibilityState === 'visible') void loadData()
+      }, 8000)
+    }
+
+    void bootstrap()
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+    }
   }, [authStatus, sessionId, router, loadData])
 
-  // Auto-join this session on entry — voting and notes require membership,
-  // and users can arrive here directly (admin console links, shared URLs)
-  // without going through the dashboard's join flow.
-  useEffect(() => {
-    if (authStatus !== 'authenticated' || !userEmail) return
-    fetch('/api/session-members', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    }).catch(() => {})
-  }, [authStatus, userEmail, sessionId])
-
-  // Keep selected in sync when candidates refresh
-  useEffect(() => {
-    if (selected) {
-      const updated = candidates.find(c => c.id === selected.id)
-      if (updated) setSelected(updated)
-    }
-  }, [candidates]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = candidates.find(candidate => candidate.id === selectedId) ?? null
 
   // Match by email when the vote has one (server dedupes by email); fall back
   // to display name for votes cast before email tracking existed.
@@ -319,7 +330,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         <ListView
           candidates={candidates}
           votes={votes}
-          onSelect={(c) => { setSelected(c); setViewMode('candidate') }}
+          onSelect={(candidate) => { setSelectedId(candidate.id); setViewMode('candidate') }}
         />
       ) : (<>
 
@@ -381,7 +392,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                 return (
                   <button
                     key={c.id}
-                    onClick={() => setSelected(c)}
+                    onClick={() => setSelectedId(c.id)}
                     className={`w-full text-left px-3 py-2.5 border-b border-[var(--border)]/50 transition-colors hover:bg-[var(--bg-raised)]${
                       isSelected ? 'bg-[var(--bg-raised)] border-l-2 border-l-[#FF6B35]' : ''
                     }`}

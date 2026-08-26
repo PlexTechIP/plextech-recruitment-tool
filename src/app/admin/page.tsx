@@ -47,6 +47,13 @@ type CoffeeChatPreview = {
 const normalizeName = (value: string) =>
   value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ')
 
+function formatDeadlineInput(deadline: string | null | undefined) {
+  if (!deadline) return ''
+  const date = new Date(deadline)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 // ─── main page ───────────────────────────────────────────────
 export default function AdminPage() {
   const router = useRouter()
@@ -99,9 +106,6 @@ export default function AdminPage() {
   const [interviewFormUrl, setInterviewFormUrl] = useState<string>('')
   const [formUrlSaving, setFormUrlSaving] = useState(false)
 
-  // Track previous cycle ID so we only reset deadline input when switching cycles
-  const prevCycleIdRef = useRef<string | null>(null)
-
   // Interview CSV import
   const interviewFileRef = useRef<HTMLInputElement>(null)
   const [interviewCsvText, setInterviewCsvText] = useState<string>('')
@@ -119,6 +123,28 @@ export default function AdminPage() {
   const [coffeeChatLoading, setCoffeeChatLoading] = useState(false)
   const [coffeeChatMessage, setCoffeeChatMessage] = useState('')
 
+  const selectRound = useCallback((round: Round | null) => {
+    setSelectedRound(round)
+    setGradingProgress(null)
+    setInterviewFormUrl(round?.interview_form_url ?? '')
+    setInterviewPreview(null)
+    setInterviewCsvText('')
+    setInterviewMessage('')
+    setRoundSessions([])
+  }, [])
+
+  const selectCycle = useCallback((cycle: RecruitmentCycle | null) => {
+    setSelectedCycle(cycle)
+    setDeadlineInput(formatDeadlineInput(cycle?.application_deadline))
+    selectRound(null)
+    setDelibMessage('')
+    setAssignMessage('')
+    setPromptMessage('')
+    setCoffeeChatMessage('')
+    setCoffeeChatPreview(null)
+    setCoffeeChatCsvText('')
+  }, [selectRound])
+
   // ── auth ─────────────────────────────────────────────────
   useEffect(() => {
     getCurrentUser().then(user => {
@@ -135,20 +161,29 @@ export default function AdminPage() {
     setCycles(data ?? [])
   }, [])
 
-  useEffect(() => { if (!loading) loadCycles() }, [loading, loadCycles])
-
   // Restore previously selected cycle from sessionStorage once cycles load.
   // Gate the persist effect on this ref so the initial null state doesn't
   // wipe the saved id before we get a chance to read it.
   const cycleRestoredRef = useRef(false)
   useEffect(() => {
-    if (cycleRestoredRef.current || cycles.length === 0) return
-    cycleRestoredRef.current = true
-    const savedId = sessionStorage.getItem('admin:selectedCycleId')
-    if (!savedId) return
-    const match = cycles.find(c => c.id === savedId)
-    if (match) setSelectedCycle(match)
-  }, [cycles])
+    if (loading) return
+    let cancelled = false
+
+    async function initializeCycles() {
+      const data: RecruitmentCycle[] = await fetch('/api/cycles').then(r => r.json())
+      if (cancelled) return
+      setCycles(data ?? [])
+      if (cycleRestoredRef.current) return
+
+      cycleRestoredRef.current = true
+      const savedId = sessionStorage.getItem('admin:selectedCycleId')
+      const match = savedId ? data.find(cycle => cycle.id === savedId) : null
+      if (match) selectCycle(match)
+    }
+
+    void initializeCycles()
+    return () => { cancelled = true }
+  }, [loading, selectCycle])
 
   useEffect(() => {
     if (!cycleRestoredRef.current) return
@@ -175,7 +210,7 @@ export default function AdminPage() {
     const data: RecruitmentCycle = await res.json()
     setNewCycleName('')
     await loadCycles()
-    setSelectedCycle(data)
+    selectCycle(data)
     setCycleLoading(false)
   }
 
@@ -198,7 +233,7 @@ export default function AdminPage() {
       body: JSON.stringify({ status: 'ended', accepting_applications: false }),
     })
     await loadCycles()
-    if (selectedCycle?.id === cycle.id) setSelectedCycle(null)
+    if (selectedCycle?.id === cycle.id) selectCycle(null)
   }
 
   // ── prompts ──────────────────────────────────────────────
@@ -212,66 +247,53 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (selectedCycle) {
-      loadPrompts(selectedCycle.id)
-      loadRounds(selectedCycle.id)
-      loadAnalytics(selectedCycle.id)
-      setSelectedRound(null)
-      setDelibMessage('')
-      setAssignMessage('')
-      setPromptMessage('')
-      setInterviewMessage('')
-      setInterviewPreview(null)
-      setInterviewCsvText('')
-      setCoffeeChatMessage('')
-      setCoffeeChatPreview(null)
-      setCoffeeChatCsvText('')
-    }
-  }, [selectedCycle, loadPrompts])
+    const cycleId = selectedCycle?.id
+    if (!cycleId) return
+    let cancelled = false
 
-  // Only reset deadline input when switching to a different cycle.
-  // datetime-local inputs expect LOCAL wall-clock time, so format manually —
-  // toISOString() would render UTC and show a time shifted by the tz offset.
-  useEffect(() => {
-    if (selectedCycle?.id === prevCycleIdRef.current) return
-    prevCycleIdRef.current = selectedCycle?.id ?? null
-    if (!selectedCycle?.application_deadline) { setDeadlineInput(''); return }
-    const d = new Date(selectedCycle.application_deadline)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    setDeadlineInput(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
-  }, [selectedCycle])
+    async function loadCycleDetails() {
+      await Promise.all([
+        loadPrompts(cycleId!),
+        loadRounds(cycleId!),
+        loadAnalytics(cycleId!),
+      ])
+      if (cancelled) return
+    }
+
+    void loadCycleDetails()
+    return () => { cancelled = true }
+  }, [selectedCycle, loadPrompts])
 
   // Load grading progress or interview form URL when round changes
   useEffect(() => {
-    setGradingProgress(null)
-    setInterviewFormUrl('')
-    setInterviewPreview(null)
-    setInterviewCsvText('')
-    setInterviewMessage('')
-    setRoundSessions([])
-    if (!selectedRound) return
-    fetch(`/api/sessions?round_id=${selectedRound.id}`)
-      .then(r => r.json())
-      .then((data: { id: string; status: string; role: 'curriculum' | 'developer' | null }[]) => {
-        if (Array.isArray(data)) setRoundSessions(data)
-      })
-      .catch(() => {})
-    if (selectedRound.grading_type === 'rubric') {
-      fetch(`/api/admin/grading-stats?round_id=${selectedRound.id}`)
-        .then(r => r.json())
-        .then(data => {
-          const graders: { email: string; assigned: number; completed: number }[] = data.graders ?? []
-          setGradingProgress({
-            totalAssignments: graders.reduce((s, g) => s + g.assigned, 0),
-            completedReviews: graders.reduce((s, g) => s + g.completed, 0),
-            graders,
-          })
+    const roundId = selectedRound?.id
+    const gradingType = selectedRound?.grading_type
+    if (!roundId) return
+    let cancelled = false
+
+    async function loadRoundDetails() {
+      const [sessions, stats] = await Promise.all([
+        fetch(`/api/sessions?round_id=${roundId}`).then(r => r.json()).catch(() => []),
+        gradingType === 'rubric'
+          ? fetch(`/api/admin/grading-stats?round_id=${roundId}`).then(r => r.json())
+          : Promise.resolve(null),
+      ])
+      if (cancelled) return
+
+      if (Array.isArray(sessions)) setRoundSessions(sessions)
+      if (stats) {
+        const graders: { email: string; assigned: number; completed: number }[] = stats.graders ?? []
+        setGradingProgress({
+          totalAssignments: graders.reduce((sum, grader) => sum + grader.assigned, 0),
+          completedReviews: graders.reduce((sum, grader) => sum + grader.completed, 0),
+          graders,
         })
+      }
     }
-    if (selectedRound.grading_type === 'interview') {
-      setInterviewFormUrl(selectedRound.interview_form_url ?? '')
-    }
-  }, [selectedRound])
+
+    void loadRoundDetails()
+    return () => { cancelled = true }
+  }, [selectedRound?.id, selectedRound?.grading_type])
 
   async function savePrompts() {
     if (!selectedCycle) return
@@ -362,25 +384,10 @@ export default function AdminPage() {
     }
   }
 
-  async function tagSessionRole(sessionId: string, role: 'curriculum' | 'developer') {
-    const res = await fetch(`/api/sessions/${sessionId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(`Could not tag session: ${err?.error ?? res.statusText}`)
-      return
-    }
-    // Refresh the session list for the selected round
-    setRoundSessions(prev => prev.map(s => s.id === sessionId ? { ...s, role } : s))
-  }
-
   async function deleteRound(round: Round) {
     if (!confirm(`Delete round "${round.name}"? This will also delete all grader assignments and reviews for this round.`)) return
     await fetch(`/api/rounds/${round.id}`, { method: 'DELETE' })
-    if (selectedRound?.id === round.id) setSelectedRound(null)
+    if (selectedRound?.id === round.id) selectRound(null)
     await loadRounds(selectedCycle!.id)
   }
 
@@ -474,7 +481,7 @@ export default function AdminPage() {
     }
     const newRound: Round = await roundRes.json()
     await loadRounds(selectedCycle.id)
-    setSelectedRound(newRound)
+    selectRound(newRound)
 
     // Assign graders
     const [allUsers, appsData] = await Promise.all([
@@ -917,7 +924,7 @@ export default function AdminPage() {
               {cycles.map(cycle => (
                 <button
                   key={cycle.id}
-                  onClick={() => setSelectedCycle(cycle)}
+                  onClick={() => selectCycle(cycle)}
                   className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
                     selectedCycle?.id === cycle.id
                       ? 'bg-[var(--bg-active)] border-[#FF6B35]/40'
@@ -1140,7 +1147,7 @@ export default function AdminPage() {
                       : 'bg-[var(--bg-raised)] border-[var(--border)]'
                   }`}>
                     <button
-                      onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
+                      onClick={() => { selectRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
                       className="flex-1 text-left px-4 py-3"
                     >
                       <div className="flex items-center justify-between gap-2">

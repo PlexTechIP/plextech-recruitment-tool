@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
 import { AuthorizedUser } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
+import { isEmail, readJsonObject } from '@/lib/apiValidation'
 
 export async function GET() {
   const auth = await requireRole('admin')
@@ -17,18 +18,21 @@ export async function POST(req: NextRequest) {
   if (auth instanceof NextResponse) return auth
 
   await connectDB()
-  const body = await req.json()
+  const parsedBody = await readJsonObject(req)
+  if (!parsedBody.ok) return parsedBody.response
+  const body = parsedBody.data
   const { email, role = 'grader' } = body
-  if (!email) return NextResponse.json({ error: 'email required' }, { status: 400 })
+  if (!isEmail(email)) return NextResponse.json({ error: 'A valid email is required.' }, { status: 400 })
   const validRoles = ['grader', 'leadership', 'admin']
-  if (!validRoles.includes(role)) return NextResponse.json({ error: 'invalid role' }, { status: 400 })
+  if (typeof role !== 'string' || !validRoles.includes(role)) return NextResponse.json({ error: 'invalid role' }, { status: 400 })
 
   try {
-    const user = await AuthorizedUser.create({ email: email.toLowerCase(), role, added_by: auth.email })
+    const user = await AuthorizedUser.create({ email: email.trim().toLowerCase(), role, added_by: auth.email })
     return NextResponse.json({ ...user.toObject(), id: user._id.toString(), _id: undefined }, { status: 201 })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Unknown error'
     if (msg.includes('duplicate')) return NextResponse.json({ error: 'Email already exists.' }, { status: 409 })
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error('Failed to add authorized user:', e)
+    return NextResponse.json({ error: 'Unable to add authorized user.' }, { status: 500 })
   }
 }

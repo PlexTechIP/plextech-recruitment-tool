@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
+import { DM_Sans } from "next/font/google";
 import "./globals.css";
 import SessionProvider from "@/components/SessionProvider";
+
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Login | PlexTech - Berkeley",
@@ -19,15 +25,12 @@ export default function RootLayout({
       className="h-full antialiased"
     >
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
         <script dangerouslySetInnerHTML={{ __html: `
           try {
             var t = localStorage.getItem('theme');
+            var el = document.documentElement;
+            el.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
             if (t !== 'dark') {
-              var el = document.documentElement;
-              el.setAttribute('data-theme', 'light');
               el.style.setProperty('--bg-base',        '#fffaf6');
               el.style.setProperty('--bg-surface',     '#ffffff');
               el.style.setProperty('--bg-raised',      '#fff3ec');
@@ -40,7 +43,7 @@ export default function RootLayout({
           } catch(e) {}
         `}} />
       </head>
-      <body className="min-h-full flex flex-col"><SessionProvider>{children}</SessionProvider></body>
+      <body className={`${dmSans.className} min-h-full flex flex-col`}><SessionProvider>{children}</SessionProvider></body>
     </html>
   );
 }
