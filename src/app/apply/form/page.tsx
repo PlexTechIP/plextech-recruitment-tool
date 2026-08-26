@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { signIn, useSession } from 'next-auth/react'
 import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 
 const RACE_OPTIONS = [
@@ -28,16 +29,23 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+function wordCount(value: string) {
+  return value.trim() === '' ? 0 : value.trim().split(/\s+/).length
+}
+
 export default function ApplicationForm() {
   const router = useRouter()
+  const { data: authSession, status: authStatus } = useSession()
+  const applicantVerified = (authSession?.user as { applicantVerified?: boolean } | undefined)?.applicantVerified === true
+  const email = authSession?.user?.email?.trim().toLowerCase() ?? ''
   const [cycle, setCycle] = useState<Cycle | null>(null)
   const [prompts, setPrompts] = useState<EssayPrompt[]>([])
+  const [loadError, setLoadError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
-  const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [year, setYear] = useState('')
   const [transfer, setTransfer] = useState(false)
@@ -54,7 +62,6 @@ export default function ApplicationForm() {
   const [raceDropdownOpen, setRaceDropdownOpen] = useState(false)
   const raceRef = useRef<HTMLDivElement>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [alreadyApplied, setAlreadyApplied] = useState(false)
 
   useEffect(() => {
     if (!APPLICATIONS_LAUNCHED) {
@@ -62,19 +69,52 @@ export default function ApplicationForm() {
       return
     }
 
-    async function load() {
-      const res = await fetch('/api/cycles')
-      const cycles: Cycle[] = await res.json()
-      const active = cycles.find(c => c.status === 'active' && c.accepting_applications) ?? null
-      if (!active) { router.replace('/apply'); return }
-      setCycle(active)
+    if (authStatus !== 'authenticated' || !applicantVerified) return
 
-      const pRes = await fetch(`/api/cycles/${active.id}/prompts`)
-      const promptData: EssayPrompt[] = await pRes.json()
-      setPrompts(promptData)
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch('/api/cycles', { cache: 'no-store' })
+        if (!res.ok) throw new Error('Unable to load the active recruitment cycle.')
+        const cycles: unknown = await res.json()
+        if (!Array.isArray(cycles)) throw new Error('The recruitment-cycle response was invalid.')
+        const active = cycles.find((candidate): candidate is Cycle => (
+          typeof candidate === 'object'
+          && candidate !== null
+          && typeof candidate.id === 'string'
+          && candidate.status === 'active'
+          && candidate.accepting_applications === true
+        )) ?? null
+        if (!active) { router.replace('/apply'); return }
+
+        const pRes = await fetch(`/api/cycles/${active.id}/prompts`, { cache: 'no-store' })
+        if (!pRes.ok) throw new Error('Unable to load the application prompts.')
+        const promptData: unknown = await pRes.json()
+        if (
+          !Array.isArray(promptData)
+          || promptData.length !== 3
+          || promptData.some(prompt => (
+            typeof prompt !== 'object'
+            || prompt === null
+            || typeof prompt.id !== 'string'
+            || typeof prompt.question_number !== 'number'
+            || typeof prompt.prompt !== 'string'
+          ))
+        ) {
+          throw new Error('The application prompts are incomplete or invalid.')
+        }
+        if (cancelled) return
+        setPrompts(promptData as EssayPrompt[])
+        setCycle(active)
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : 'Unable to load the application.')
+        }
+      }
     }
-    load()
-  }, [router])
+    void load()
+    return () => { cancelled = true }
+  }, [router, authStatus, applicantVerified])
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -85,15 +125,6 @@ export default function ApplicationForm() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
-
-  async function checkDuplicate(emailValue: string) {
-    if (!cycle || !emailValue.trim()) return
-    const res = await fetch(`/api/applicants/check-duplicate?cycle_id=${cycle.id}&email=${encodeURIComponent(emailValue.trim())}`)
-    if (res.ok) {
-      const { exists } = await res.json()
-      setAlreadyApplied(exists)
-    }
-  }
 
   function toggleRace(option: string) {
     setRace(prev => prev.includes(option) ? prev.filter(r => r !== option) : [...prev, option])
@@ -115,7 +146,7 @@ export default function ApplicationForm() {
       const key = `answer_${prompt.id}`
       const val = answers[key] ?? ''
       if (!val.trim()) e[key] = 'required'
-      else if (val.length > 1500) e[key] = 'Your answer must not exceed 1500 characters.'
+      else if (wordCount(val) < 150 || wordCount(val) > 200) e[key] = 'Your answer must be between 150 and 200 words.'
     }
     setErrors(e)
     return Object.keys(e).length === 0
@@ -124,7 +155,6 @@ export default function ApplicationForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSubmitError('')
-    if (alreadyApplied) { setSubmitError('An application has already been submitted with this email.'); return }
     if (!validate()) { setSubmitError('Please fill out the required fields above.'); return }
     if (!cycle) return
 
@@ -177,7 +207,50 @@ export default function ApplicationForm() {
     }
   }
 
-  if (!cycle) return null
+  if (authStatus === 'loading') return null
+  if (authStatus !== 'authenticated' || !applicantVerified) {
+    const startSignIn = () => {
+      if (window.self !== window.top) {
+        window.open('/apply/form', '_blank', 'noopener,noreferrer')
+        return
+      }
+      void signIn('google', { callbackUrl: '/apply/form' })
+    }
+    return (
+      <div className="apply-page">
+        <div className="apply-home-card">
+          <Image src="/PlexTechLogo.png" alt="PlexTech" width={50} height={50} />
+          <h2>Verify your Berkeley email</h2>
+          <p>Sign in with your Berkeley Google account before starting your application.</p>
+          <button
+            type="button"
+            className="apply-btn-primary"
+            onClick={startSignIn}
+          >
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    )
+  }
+  if (!cycle) {
+    return (
+      <div className="apply-page">
+        <div className="apply-home-card">
+          <Image src="/PlexTechLogo.png" alt="PlexTech" width={50} height={50} />
+          <h2>{loadError ? 'Application temporarily unavailable' : 'Loading application…'}</h2>
+          {loadError && (
+            <>
+              <p>{loadError} Please refresh or try again shortly.</p>
+              <button type="button" className="apply-btn-primary" onClick={() => window.location.reload()}>
+                Refresh
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="apply-page">
@@ -217,15 +290,10 @@ export default function ApplicationForm() {
           <input
             type="email"
             value={email}
-            onChange={e => { setEmail(e.target.value); setAlreadyApplied(false) }}
-            onBlur={e => checkDuplicate(e.target.value)}
+            readOnly
+            aria-readonly="true"
           />
           {errors.email && <p className="apply-warning">{errors.email}</p>}
-          {alreadyApplied && (
-            <p className="apply-warning">
-              An application has already been submitted with this email for {cycle.name}. If you believe this is an error, please contact plextech@berkeley.edu.
-            </p>
-          )}
         </div>
 
         <div className="apply-field">
@@ -363,12 +431,12 @@ export default function ApplicationForm() {
             <div className="apply-field" key={prompt.id}>
               <label>{prompt.prompt}</label>
               {prompt.description && <p style={{ color: 'grey', margin: '0.25rem 0' }}>{prompt.description}</p>}
-              <p style={{ color: 'grey', margin: '0.25rem 0' }}>(~200 words)</p>
               <textarea
                 value={answers[key] ?? ''}
+                maxLength={6000}
                 onChange={e => setAnswers(prev => ({ ...prev, [key]: e.target.value }))}
               />
-              <p style={{ fontSize: '0.8rem', color: 'grey' }}>{(answers[key] ?? '').length} / 1500 characters</p>
+              <p style={{ fontSize: '0.8rem', color: 'grey' }}>{wordCount(answers[key] ?? '')} / 150–200 words</p>
               {errors[key] && <p className="apply-warning">{errors[key]}</p>}
             </div>
           )
@@ -391,7 +459,7 @@ export default function ApplicationForm() {
           {submitError && <p className="apply-warning">{submitError}</p>}
         </div>
 
-        <p style={{ color: 'grey', fontSize: '0.85rem' }}>Copyright © 2024 PlexTech All Rights Reserved.</p>
+        <p style={{ color: 'grey', fontSize: '0.85rem' }}>Copyright © 2026 PlexTech All Rights Reserved.</p>
       </form>
     </div>
   )

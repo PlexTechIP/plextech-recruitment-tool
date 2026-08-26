@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, EssayResponse, EssayPrompt, GraderAssignment } from '@/lib/models'
+import { Applicant, EssayResponse, EssayPrompt, GraderAssignment, Round } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
+import { isObjectId } from '@/lib/apiValidation'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireRole('grader')
@@ -9,24 +11,43 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   await connectDB()
   const { id } = await params
+  if (!isObjectId(id)) return NextResponse.json({ error: 'Invalid applicant id.' }, { status: 400 })
 
   // Graders may only access applicants assigned to them; leadership can access anyone
   if (auth.role === 'grader') {
-    const assigned = await GraderAssignment.exists({ applicant_id: id, grader_email: auth.email })
-    if (!assigned) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    const assignments = await GraderAssignment.find({ applicant_id: id, grader_email: auth.email }).select('round_id').lean()
+    const roundIds = assignments.map(assignment => assignment.round_id)
+    const activeRound = roundIds.length
+      ? await Round.exists({ _id: mongoose.trusted({ $in: roundIds }), status: 'grading' })
+      : null
+    if (!activeRound) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const [applicantDoc, responses] = await Promise.all([
-    Applicant.findById(id, { resume_base64: 0 }).lean(),
+    Applicant.findById(id)
+      .select('cycle_id first_name last_name year transfer major desired_roles linkedin website time_commitment')
+      .lean(),
     EssayResponse.find({ applicant_id: id }).lean(),
   ])
 
   if (!applicantDoc) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const applicant = { ...applicantDoc, id: applicantDoc._id.toString(), cycle_id: applicantDoc.cycle_id.toString(), _id: undefined }
+  const applicant = {
+    id: applicantDoc._id.toString(),
+    cycle_id: applicantDoc.cycle_id.toString(),
+    first_name: applicantDoc.first_name,
+    last_name: applicantDoc.last_name,
+    year: applicantDoc.year,
+    transfer: applicantDoc.transfer,
+    major: applicantDoc.major,
+    desired_roles: applicantDoc.desired_roles,
+    linkedin: applicantDoc.linkedin,
+    website: applicantDoc.website,
+    time_commitment: applicantDoc.time_commitment,
+  }
 
   const promptIds = responses.map(r => r.prompt_id)
-  const prompts = await EssayPrompt.find({ _id: { $in: promptIds } }).sort({ question_number: 1 }).lean()
+  const prompts = await EssayPrompt.find({ _id: mongoose.trusted({ $in: promptIds }) }).sort({ question_number: 1 }).lean()
 
   const essays = prompts.map(p => {
     const r = responses.find(r => r.prompt_id.toString() === p._id.toString())
@@ -36,5 +57,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     }
   })
 
-  return NextResponse.json({ applicant, essays })
+  return NextResponse.json(
+    { applicant, essays },
+    { headers: { 'Cache-Control': 'private, no-store, max-age=0' } },
+  )
 }

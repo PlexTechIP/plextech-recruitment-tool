@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
 import { Applicant, EssayPrompt, EssayResponse, RecruitmentCycle } from '@/lib/models'
 import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
-import { consumePublicRateLimit } from '@/lib/rateLimit'
+import { consumePublicRateLimit, consumeUserRateLimit } from '@/lib/rateLimit'
+import { isEmail, isNonEmptyString, isObjectId, isPlainRecord, normalizeHttpUrl, readJsonObject } from '@/lib/apiValidation'
+import { requireApplicantAuth } from '@/lib/serverAuth'
+import { validateResumePdf } from '@/lib/pdfValidation'
 
 const MAX_REQUEST_BYTES = 4_300_000
 const MAX_RESUME_BYTES = 3 * 1024 * 1024
@@ -19,128 +23,187 @@ const VALID_RACES = [
 ]
 const VALID_ROLES = ['Curriculum Student', 'Industry Developer']
 
+class SubmissionRejected extends Error {
+  constructor(
+    readonly message: string,
+    readonly status: number,
+  ) {
+    super(message)
+    this.name = 'SubmissionRejected'
+  }
+}
+
+function wordCount(value: string) {
+  return value.trim() === '' ? 0 : value.trim().split(/\s+/).length
+}
+
 export async function POST(req: NextRequest) {
   if (!APPLICATIONS_LAUNCHED) {
     return NextResponse.json({ error: 'Applications are not open yet.' }, { status: 403 })
   }
 
-  const contentLength = Number(req.headers.get('content-length') ?? 0)
-  if (contentLength > MAX_REQUEST_BYTES) {
-    return NextResponse.json({ error: 'Submission is too large. Resume PDFs must be 3MB or smaller.' }, { status: 413 })
-  }
+  const applicantAuth = await requireApplicantAuth()
+  if (applicantAuth instanceof NextResponse) return applicantAuth
 
   await connectDB()
-  if (!await consumePublicRateLimit(req, 'application-submit', 10, 60 * 60 * 1000)) {
+  // Keep a generous IP ceiling for shared campus/NAT networks and a tighter
+  // identity-bound ceiling now that every applicant has verified Google auth.
+  if (!await consumePublicRateLimit(req, 'application-submit-ip', 200, 60 * 60 * 1000)) {
+    return NextResponse.json(
+      { error: 'Too many submission attempts. Please try again later.' },
+      { status: 429, headers: { 'Retry-After': '3600' } },
+    )
+  }
+  if (!await consumeUserRateLimit(applicantAuth.email, 'application-submit-user', 10, 60 * 60 * 1000)) {
     return NextResponse.json(
       { error: 'Too many submission attempts. Please try again later.' },
       { status: 429, headers: { 'Retry-After': '3600' } },
     )
   }
 
-  const body = await req.json()
+  const parsedBody = await readJsonObject(req, MAX_REQUEST_BYTES)
+  if (!parsedBody.ok) return parsedBody.response
+  const body = parsedBody.data
   const { essays } = body
 
   // Whitelist and validate all applicant fields
-  const email = String(body.email ?? '').trim().toLowerCase()
-  const first_name = String(body.first_name ?? '').trim().slice(0, 100)
-  const last_name = String(body.last_name ?? '').trim().slice(0, 100)
-  const phone = String(body.phone ?? '').trim().slice(0, 30)
+  const submittedEmail = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+  if (submittedEmail && submittedEmail !== applicantAuth.email) {
+    return NextResponse.json({ error: 'The application email must match your signed-in Google account.' }, { status: 403 })
+  }
+  const email = applicantAuth.email
+  const first_name = typeof body.first_name === 'string' ? body.first_name.trim() : ''
+  const last_name = typeof body.last_name === 'string' ? body.last_name.trim() : ''
+  const phone = typeof body.phone === 'string' ? body.phone.trim() : ''
   const VALID_YEARS = ['Freshman', 'Sophomore', 'Junior', 'Senior']
-  const year = VALID_YEARS.includes(body.year) ? body.year : ''
+  const year = typeof body.year === 'string' && VALID_YEARS.includes(body.year) ? body.year : ''
   const transfer = body.transfer === true
-  const major = String(body.major ?? '').trim().slice(0, 200)
-  const gender = String(body.gender ?? '').trim().slice(0, 100)
+  const major = typeof body.major === 'string' ? body.major.trim() : ''
+  const gender = typeof body.gender === 'string' ? body.gender.trim() : ''
   const race: string[] = Array.isArray(body.race)
     ? body.race.filter((r: unknown) => typeof r === 'string' && VALID_RACES.includes(r))
     : []
-  const desired_roles = String(body.desired_roles ?? '').trim()
-  const linkedin = body.linkedin ? String(body.linkedin).trim().slice(0, 500) : null
-  const website = body.website ? String(body.website).trim().slice(0, 500) : null
-  const time_commitment = String(body.time_commitment ?? '').trim().slice(0, 3000)
+  const desired_roles = typeof body.desired_roles === 'string' ? body.desired_roles.trim() : ''
+  const linkedin = normalizeHttpUrl(body.linkedin)
+  const website = normalizeHttpUrl(body.website)
+  const time_commitment = typeof body.time_commitment === 'string' ? body.time_commitment.trim() : ''
   const resume_base64 = typeof body.resume_base64 === 'string' ? body.resume_base64.trim() : null
   const cycle_id = String(body.cycle_id ?? '').trim()
 
-  if (!email || !first_name || !last_name || !cycle_id) {
+  if (
+    !isEmail(email)
+    || !isNonEmptyString(first_name, 100)
+    || !isNonEmptyString(last_name, 100)
+    || phone.length < 7
+    || phone.length > 30
+    || !year
+    || !isNonEmptyString(major, 200)
+    || race.length === 0
+    || !isNonEmptyString(time_commitment, 3000)
+    || !cycle_id
+  ) {
     return NextResponse.json({ error: 'Missing required fields.' }, { status: 400 })
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
-    return NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 })
-  }
+  if (gender.length > 100) return NextResponse.json({ error: 'Gender response is too long.' }, { status: 400 })
   if (!VALID_ROLES.includes(desired_roles)) {
     return NextResponse.json({ error: 'Invalid role.' }, { status: 400 })
+  }
+  if ((body.linkedin && !linkedin) || (body.website && !website)) {
+    return NextResponse.json({ error: 'LinkedIn and website links must be valid HTTP or HTTPS URLs.' }, { status: 400 })
+  }
+  if (!isObjectId(cycle_id)) {
+    return NextResponse.json({ error: 'Invalid cycle.' }, { status: 400 })
   }
   if (!resume_base64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(resume_base64)) {
     return NextResponse.json({ error: 'A valid PDF resume is required.' }, { status: 400 })
   }
   const resumeBytes = Buffer.from(resume_base64, 'base64')
+  const canonicalBase64 = resumeBytes.toString('base64').replace(/=+$/, '')
+  if (canonicalBase64 !== resume_base64.replace(/=+$/, '')) {
+    return NextResponse.json({ error: 'The uploaded resume is not valid base64 data.' }, { status: 400 })
+  }
   if (resumeBytes.length === 0 || resumeBytes.length > MAX_RESUME_BYTES) {
     return NextResponse.json({ error: 'Resume PDFs must be 3MB or smaller.' }, { status: 413 })
   }
-  if (resumeBytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+  const pdfText = resumeBytes.toString('latin1')
+  if (!/^%PDF-(?:1\.[0-7]|2\.0)/.test(pdfText) || !/%%EOF[\s\0]*$/.test(pdfText.slice(-2048))) {
     return NextResponse.json({ error: 'The uploaded resume must be a PDF.' }, { status: 400 })
   }
+  const pdfValidation = await validateResumePdf(resumeBytes)
+  if (!pdfValidation.ok) return NextResponse.json({ error: pdfValidation.error }, { status: 400 })
 
-  // Enforce that the cycle is actively accepting applications and the deadline (if set) hasn't passed.
-  // This route is intentionally unauthenticated (applicants don't have accounts), so the window check
-  // is the only guard against spam / out-of-window submissions.
-  let cycle
-  try {
-    cycle = await RecruitmentCycle.findById(cycle_id).lean()
-  } catch {
-    return NextResponse.json({ error: 'Invalid cycle.' }, { status: 400 })
+  const submittedEssays = Array.isArray(essays) ? essays.filter(isPlainRecord) : []
+  const promptIds = submittedEssays.map(e => String(e.prompt_id ?? ''))
+  if (submittedEssays.length !== (Array.isArray(essays) ? essays.length : 0) || promptIds.some(id => !isObjectId(id))) {
+    return NextResponse.json({ error: 'Invalid essay prompt data.' }, { status: 400 })
   }
-  if (!cycle) return NextResponse.json({ error: 'Cycle not found.' }, { status: 404 })
-  if (cycle.status !== 'active' || !cycle.accepting_applications) {
-    return NextResponse.json({ error: 'This cycle is not accepting applications.' }, { status: 403 })
+  const essayResponses = submittedEssays.map(essay => typeof essay.response === 'string' ? essay.response.trim() : '')
+  if (essayResponses.some(response => response.length > 6000 || wordCount(response) < 150 || wordCount(response) > 200)) {
+    return NextResponse.json({ error: 'Each essay response must be between 150 and 200 words.' }, { status: 400 })
   }
-  if (cycle.application_deadline && new Date(cycle.application_deadline).getTime() < Date.now()) {
-    return NextResponse.json({ error: 'The application deadline has passed.' }, { status: 403 })
-  }
-
-  const existing = await Applicant.findOne({ cycle_id, email })
-  if (existing) {
-    return NextResponse.json({ error: 'An application with this email already exists for this cycle.' }, { status: 409 })
-  }
-
-  const submittedEssays = Array.isArray(essays) ? essays : []
-  const promptIds = submittedEssays
-    .filter((e: unknown) => e && typeof e === 'object' && 'prompt_id' in (e as object))
-    .map((e: { prompt_id: string }) => String(e.prompt_id))
-  const [validPromptCount, expectedPromptCount] = await Promise.all([
-    EssayPrompt.countDocuments({ cycle_id, _id: { $in: promptIds } }),
-    EssayPrompt.countDocuments({ cycle_id }),
-  ])
-  if (
-    promptIds.length !== new Set(promptIds).size
-    || validPromptCount !== promptIds.length
-    || promptIds.length !== expectedPromptCount
-  ) {
+  if (promptIds.length !== 3 || promptIds.length !== new Set(promptIds).size) {
     return NextResponse.json({ error: 'Invalid essay prompt data.' }, { status: 400 })
   }
 
-  let applicant
+  let applicantId = ''
+  const session = await mongoose.startSession()
   try {
-    applicant = await Applicant.create({
-      cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
-      race, desired_roles, linkedin, website, time_commitment, resume_base64,
+    await session.withTransaction(async () => {
+      // Touch the cycle in the same transaction as the application. Closing or
+      // deleting the cycle, or changing its prompts, now creates a write
+      // conflict instead of allowing a stale validation to commit afterward.
+      const cycleGuard = await RecruitmentCycle.updateOne(
+        {
+          _id: cycle_id,
+          status: 'active',
+          accepting_applications: true,
+          application_deadline: mongoose.trusted({ $gt: new Date() }),
+        },
+        { $inc: { submission_count: 1 } },
+        { session },
+      )
+      if (cycleGuard.modifiedCount !== 1) {
+        throw new SubmissionRejected('This cycle is not accepting applications.', 403)
+      }
+
+      const configuredPrompts = await EssayPrompt.find({ cycle_id })
+        .select('_id criterion1 criterion2')
+        .session(session)
+        .lean()
+      const configuredPromptIds = new Set(configuredPrompts.map(prompt => prompt._id.toString()))
+      if (
+        configuredPrompts.length !== 3
+        || configuredPrompts.some(prompt => !prompt.criterion1?.trim() || !prompt.criterion2?.trim())
+        || promptIds.some(promptId => !configuredPromptIds.has(promptId))
+      ) {
+        throw new SubmissionRejected('Invalid essay prompt data.', 409)
+      }
+
+      const [applicant] = await Applicant.create([{
+        cycle_id, first_name, last_name, email, phone, year, transfer, major, gender,
+        race, desired_roles, linkedin, website, time_commitment, resume_base64,
+        identity_provider: 'google-berkeley',
+        identity_verified_at: new Date(),
+      }], { session })
+      applicantId = applicant._id.toString()
+
+      const rows = submittedEssays.map((essay, index) => ({
+        applicant_id: applicant._id,
+        prompt_id: String(essay.prompt_id),
+        response: essayResponses[index],
+      }))
+      await EssayResponse.insertMany(rows, { session })
     })
   } catch (error: unknown) {
+    if (error instanceof SubmissionRejected) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
     if (typeof error === 'object' && error && 'code' in error && error.code === 11000) {
       return NextResponse.json({ error: 'An application with this email already exists for this cycle.' }, { status: 409 })
     }
     throw error
-  }
-  const applicantId = applicant._id.toString()
-
-  if (submittedEssays.length > 0) {
-    const rows = submittedEssays
-      .filter((e: unknown) => e && typeof e === 'object' && 'prompt_id' in (e as object))
-      .map((e: { prompt_id: string; response: string }) => ({
-        applicant_id: applicantId,
-        prompt_id: e.prompt_id,
-        response: String(e.response ?? '').slice(0, 6000),
-      }))
-    if (rows.length > 0) await EssayResponse.insertMany(rows)
+  } finally {
+    await session.endSession()
   }
 
   return NextResponse.json({ id: applicantId }, { status: 201 })

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
 import { GraderAssignment, Review, Applicant } from '@/lib/models'
 import { evaluateResults } from '@/lib/scoring'
 import { Review as ReviewType, Applicant as ApplicantType } from '@/lib/types'
 import { requireRole } from '@/lib/serverAuth'
+import { isObjectId } from '@/lib/apiValidation'
 
 export async function GET(req: NextRequest) {
   const auth = await requireRole('leadership')
@@ -11,7 +13,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url)
   const round_id = searchParams.get('round_id')
-  if (!round_id) return NextResponse.json({ error: 'round_id required' }, { status: 400 })
+  if (!isObjectId(round_id)) return NextResponse.json({ error: 'A valid round_id is required.' }, { status: 400 })
 
   await connectDB()
 
@@ -40,7 +42,7 @@ export async function GET(req: NextRequest) {
   // Applicant scores
   const applicantIds = [...new Set(assignments.map(a => a.applicant_id.toString()))]
   const applicantDocs = await Applicant.find(
-    { _id: { $in: applicantIds } },
+    { _id: mongoose.trusted({ $in: applicantIds }) },
     { resume_base64: 0 }
   ).lean()
 

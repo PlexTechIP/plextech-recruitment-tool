@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, Candidate, CoffeeChatNote, Round, Session, SessionMember } from '@/lib/models'
+import { Applicant, Candidate, CoffeeChatNote, Round, Session, SessionBan, SessionMember } from '@/lib/models'
 import { normalizePersonName } from '@/lib/coffeeChats'
 import { requireRole } from '@/lib/serverAuth'
 
@@ -20,24 +20,29 @@ export async function GET(req: NextRequest) {
 
   const session = await Session.findById(candidate.session_id).select('round_id').lean()
   if (!session) return NextResponse.json({ error: 'Session not found.' }, { status: 404 })
+  const round = session.round_id
+    ? await Round.findById(session.round_id).select('cycle_id').lean()
+    : null
 
-  const isMember = await SessionMember.exists({
-    session_id: candidate.session_id,
-    user_email: auth.email.toLowerCase(),
-  })
+  const [isMember, banned] = await Promise.all([
+    SessionMember.exists({ session_id: candidate.session_id, user_email: auth.email }),
+    SessionBan.exists({ session_id: candidate.session_id, email: auth.email }),
+  ])
+  if (banned) return NextResponse.json({ error: 'You have been removed from this session.' }, { status: 403 })
   if (!isMember) return NextResponse.json({ error: 'Join this session to view coffee-chat notes.' }, { status: 403 })
 
   let applicantId = candidate.applicant_id?.toString() ?? null
-  if (!applicantId && session.round_id) {
-    const round = await Round.findById(session.round_id).select('cycle_id').lean()
-    if (round) {
+  if (applicantId && round) {
+    const belongsToCycle = await Applicant.exists({ _id: applicantId, cycle_id: round.cycle_id })
+    if (!belongsToCycle) return NextResponse.json({ error: 'Candidate does not belong to this cycle.' }, { status: 403 })
+  }
+  if (!applicantId && round) {
       const applicants = await Applicant.find({ cycle_id: round.cycle_id }).select('first_name last_name').lean()
       const candidateName = normalizePersonName(candidate.name)
       const matches = applicants.filter(applicant =>
         normalizePersonName(`${applicant.first_name} ${applicant.last_name}`) === candidateName,
       )
       if (matches.length === 1) applicantId = matches[0]._id.toString()
-    }
   }
   if (!applicantId) return NextResponse.json([])
 

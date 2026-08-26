@@ -104,16 +104,17 @@ export default function Dashboard() {
     const sessionId = joinSessionId.trim().toUpperCase()
     if (!sessionId) { setJoinError('Enter a session ID.'); setJoinLoading(false); return }
 
-    const res = await fetch(`/api/sessions/${sessionId}`)
-    if (!res.ok) { setJoinError('Session not found.'); setJoinLoading(false); return }
-    const session = await res.json()
-    if (session.status === 'ended') { setJoinError('This session has ended.'); setJoinLoading(false); return }
-
-    await fetch('/api/session-members', {
+    const res = await fetch('/api/session-members', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, user_email: currentUser!.email }),
     })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      setJoinError(error.error ?? 'Session not found.')
+      setJoinLoading(false)
+      return
+    }
     router.push(`/session/${sessionId}`)
   }
 
@@ -203,7 +204,6 @@ export default function Dashboard() {
 
   const user = currentUser!
   const isAdmin = user.role === 'admin'
-  const isLeadership = user.role === 'leadership' || isAdmin
 
   const ROLE_BADGE: Record<UserRole, string> = {
     admin:      'bg-purple-500/15 text-purple-400 border-purple-500/30',

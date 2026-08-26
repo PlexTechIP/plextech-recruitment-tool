@@ -11,14 +11,34 @@ export const authOptions: AuthOptions = {
     }),
   ],
   callbacks: {
-    async signIn({ user }) {
+    async signIn({ user, profile }) {
       if (!user.email) return false
       await connectDB()
-      const found = await AuthorizedUser.findOne({ email: user.email.toLowerCase() })
-      return !!found
+      const email = user.email.trim().toLowerCase()
+      const found = await AuthorizedUser.exists({ email })
+      const googleProfile = profile as { email_verified?: boolean; hd?: string } | undefined
+      const isVerifiedBerkeleyApplicant = googleProfile?.email_verified === true
+        && googleProfile.hd === 'berkeley.edu'
+        && email.endsWith('@berkeley.edu')
+      // Authorized members use the internal tools. Applicants may authenticate
+      // with a Berkeley Google account solely to prove ownership of the email
+      // used on their application; requireRole() still rejects sessions without
+      // an AuthorizedUser role from every protected API.
+      return !!found || isVerifiedBerkeleyApplicant
     },
-    async session({ session }) {
+    async jwt({ token, profile }) {
+      if (profile) {
+        const googleProfile = profile as { email?: string; email_verified?: boolean; hd?: string }
+        const email = googleProfile.email?.trim().toLowerCase()
+        token.applicantVerified = googleProfile.email_verified === true
+          && googleProfile.hd === 'berkeley.edu'
+          && !!email?.endsWith('@berkeley.edu')
+      }
+      return token
+    },
+    async session({ session, token }) {
       if (!session.user?.email) return session
+      ;(session.user as typeof session.user & { applicantVerified?: boolean }).applicantVerified = token.applicantVerified === true
       await connectDB()
       const found = await AuthorizedUser.findOne({ email: session.user.email.toLowerCase() })
       if (found) {
