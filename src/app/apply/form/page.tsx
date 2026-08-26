@@ -209,7 +209,7 @@ export default function ApplicationForm() {
         const draft = raw ? parseApplicationDraft(raw) : null
         if (!draft || draft.cycleId !== cycle.id || draft.expiresAt <= Date.now()) {
           if (raw) window.localStorage.removeItem(draftKey)
-          setDraftMessage('Drafts save automatically in this browser. Your resume is not stored.')
+          setDraftMessage('')
         } else {
           const validAnswerKeys = new Set(prompts.map(prompt => `answer_${prompt.id}`))
           const restoredAnswers = Object.fromEntries(
@@ -229,10 +229,10 @@ export default function ApplicationForm() {
           setWebsite(draft.fields.website)
           setAnswers(restoredAnswers)
           setCommitments(draft.fields.commitments)
-          setDraftMessage('Draft restored from this browser. Please reattach your resume before submitting.')
+          setDraftMessage(`Draft saved at ${new Date(draft.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
         }
       } catch {
-        setDraftMessage('Local draft saving is unavailable in this browser. The form will still work normally.')
+        setDraftMessage('')
       }
       setDraftReadyKey(draftKey)
     }, 0)
@@ -273,9 +273,9 @@ export default function ApplicationForm() {
       if (submittedRef.current) return
       try {
         window.localStorage.setItem(pendingDraft.key, pendingDraft.value)
-        setDraftMessage(`Draft saved locally at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Your resume is not stored.`)
+        setDraftMessage(`Draft saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`)
       } catch {
-        setDraftMessage('Local draft saving is unavailable in this browser. The form will still work normally.')
+        setDraftMessage('')
       }
     }, 500)
 
@@ -472,9 +472,9 @@ export default function ApplicationForm() {
           <h1>PlexTech Application — {cycle.name}</h1>
           <h4>Thank you for your interest in PlexTech!<br />Please fill out the information below and we will get back to you soon.</h4>
           <p>All applications submitted are final; duplicates will not be accepted.</p>
-          <p aria-live="polite" style={{ color: '#6b7280', fontSize: '0.9rem' }}>
-            {draftMessage || 'Drafts save automatically in this browser. Your resume is not stored.'}
-          </p>
+          {draftMessage && (
+            <p aria-live="polite" style={{ color: '#6b7280', fontSize: '0.9rem' }}>{draftMessage}</p>
+          )}
           {cycle.application_deadline && (
             <p style={{ color: '#ec6f34' }}>
               Applications close on {new Date(cycle.application_deadline).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/Los_Angeles' })} PT
