@@ -15,7 +15,7 @@ export default function Unauthorized() {
         <p className="plex-gradient-text text-sm font-bold uppercase tracking-widest mb-6">PlexTech Berkeley</p>
         <h1 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Access Denied</h1>
         <p className="text-[var(--text-muted)] mb-6">
-          Your email is not on the authorized list for this tool. Contact an admin to get access.
+          Applicants should use a verified Google account. Internal tools require an email authorized by a PlexTech admin.
         </p>
         <button
           onClick={() => router.push('/')}

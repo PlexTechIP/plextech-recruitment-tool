@@ -426,8 +426,8 @@ export default function ApplicationForm() {
       <div className="apply-page">
         <div className="apply-home-card">
           <Image src="/PlexTechLogo.png" alt="PlexTech" width={50} height={50} />
-          <h2>Verify your Berkeley email</h2>
-          <p>Sign in with your Berkeley Google account before starting your application.</p>
+          <h2>Verify your email</h2>
+          <p>Sign in with any verified Google account before starting your application.</p>
           <button
             type="button"
             className="apply-btn-primary"
@@ -495,7 +495,7 @@ export default function ApplicationForm() {
         </div>
 
         <div className="apply-field">
-          <label>Berkeley Email</label>
+          <label>Email</label>
           <input
             type="email"
             value={email}
