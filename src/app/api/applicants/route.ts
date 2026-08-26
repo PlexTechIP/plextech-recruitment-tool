@@ -33,10 +33,6 @@ class SubmissionRejected extends Error {
   }
 }
 
-function wordCount(value: string) {
-  return value.trim() === '' ? 0 : value.trim().split(/\s+/).length
-}
-
 export async function POST(req: NextRequest) {
   if (!APPLICATIONS_LAUNCHED) {
     return NextResponse.json({ error: 'Applications are not open yet.' }, { status: 403 })
@@ -138,8 +134,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid essay prompt data.' }, { status: 400 })
   }
   const essayResponses = submittedEssays.map(essay => typeof essay.response === 'string' ? essay.response.trim() : '')
-  if (essayResponses.some(response => response.length > 6000 || wordCount(response) < 150 || wordCount(response) > 200)) {
-    return NextResponse.json({ error: 'Each essay response must be between 150 and 200 words.' }, { status: 400 })
+  if (essayResponses.some(response => response.length === 0 || response.length > 1500)) {
+    return NextResponse.json({ error: 'Each essay response is required and must be 1,500 characters or fewer.' }, { status: 400 })
   }
   if (promptIds.length !== 3 || promptIds.length !== new Set(promptIds).size) {
     return NextResponse.json({ error: 'Invalid essay prompt data.' }, { status: 400 })

@@ -98,6 +98,10 @@ function parseApplicationDraft(raw: string): ApplicationDraft | null {
   }
 }
 
+function promptDescriptionWithoutWordCount(description: string) {
+  return description.replace(/\s*\(~?\d+(?:\s*[–-]\s*\d+)?\s+words?\)\s*$/i, '').trim()
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -105,10 +109,6 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = reject
     reader.readAsDataURL(file)
   })
-}
-
-function wordCount(value: string) {
-  return value.trim() === '' ? 0 : value.trim().split(/\s+/).length
 }
 
 export default function ApplicationForm() {
@@ -343,7 +343,7 @@ export default function ApplicationForm() {
       const key = `answer_${prompt.id}`
       const val = answers[key] ?? ''
       if (!val.trim()) e[key] = 'required'
-      else if (wordCount(val) < 150 || wordCount(val) > 200) e[key] = 'Your answer must be between 150 and 200 words.'
+      else if (val.length > 1500) e[key] = 'Your answer must be 1,500 characters or fewer.'
     }
     setErrors(e)
     return Object.keys(e).length === 0
@@ -636,16 +636,17 @@ export default function ApplicationForm() {
 
         {prompts.map(prompt => {
           const key = `answer_${prompt.id}`
+          const description = prompt.description ? promptDescriptionWithoutWordCount(prompt.description) : ''
           return (
             <div className="apply-field" key={prompt.id}>
-              <label>{prompt.prompt}</label>
-              {prompt.description && <p style={{ color: 'grey', margin: '0.25rem 0' }}>{prompt.description}</p>}
+              <label>{prompt.prompt} <span style={{ color: 'grey', fontWeight: 400 }}>(150–200 words)</span></label>
+              {description && <p style={{ color: 'grey', margin: '0.25rem 0' }}>{description}</p>}
               <textarea
                 value={answers[key] ?? ''}
-                maxLength={6000}
+                maxLength={1500}
                 onChange={e => setAnswers(prev => ({ ...prev, [key]: e.target.value }))}
               />
-              <p style={{ fontSize: '0.8rem', color: 'grey' }}>{wordCount(answers[key] ?? '')} / 150–200 words</p>
+              <p style={{ fontSize: '0.8rem', color: 'grey' }}>{(answers[key] ?? '').length} / 1,500 characters</p>
               {errors[key] && <p className="apply-warning">{errors[key]}</p>}
             </div>
           )
