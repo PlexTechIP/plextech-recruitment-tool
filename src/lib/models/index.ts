@@ -100,7 +100,7 @@ export const RateLimit = models.RateLimit || model('RateLimit', RateLimitSchema)
 const EssayResponseSchema = new Schema({
   applicant_id: { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
   prompt_id:    { type: Schema.Types.ObjectId, ref: 'EssayPrompt', required: true },
-  response:     { type: String, required: true, maxlength: 6000 },
+  response:     { type: String, required: true, maxlength: 1500 },
 })
 EssayResponseSchema.index({ applicant_id: 1, prompt_id: 1 }, { unique: true })
 export const EssayResponse = models.EssayResponse || model('EssayResponse', EssayResponseSchema)
