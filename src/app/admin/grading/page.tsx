@@ -22,6 +22,12 @@ interface ApplicantRow {
   reviews: { grader_email: string; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }[]
 }
 
+type SortKey = 'total' | 'name' | 'reviews'
+
+function SortIcon({ active, direction }: { active: boolean; direction: 'asc' | 'desc' }) {
+  return active ? <span className="ml-1">{direction === 'desc' ? '↓' : '↑'}</span> : null
+}
+
 export default function GradingConsolePage() {
   const router = useRouter()
   const [authed, setAuthed] = useState(false)
@@ -33,8 +39,39 @@ export default function GradingConsolePage() {
   const [applicants, setApplicants] = useState<ApplicantRow[]>([])
   const [loading, setLoading] = useState(false)
   const [expandedApplicant, setExpandedApplicant] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<'total' | 'name' | 'reviews'>('total')
+  const [sortKey, setSortKey] = useState<SortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const loadStats = useCallback(async (roundId: string) => {
+    setLoading(true)
+    const res = await fetch(`/api/admin/grading-stats?round_id=${roundId}`)
+    const data = await res.json()
+    setGraders(data.graders ?? [])
+    setApplicants(data.applicants ?? [])
+    setLoading(false)
+  }, [])
+
+  const selectRound = useCallback((roundId: string) => {
+    setSelectedRoundId(roundId)
+    setGraders([])
+    setApplicants([])
+    if (roundId) void loadStats(roundId)
+  }, [loadStats])
+
+  const selectCycle = useCallback(async (cycleId: string) => {
+    setSelectedCycleId(cycleId)
+    setSelectedRoundId('')
+    setRounds([])
+    setGraders([])
+    setApplicants([])
+    if (!cycleId) return
+
+    const response = await fetch(`/api/cycles/${cycleId}/rounds`)
+    const data: Round[] = await response.json()
+    const sorted = (data ?? []).sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+    setRounds(sorted)
+    selectRound(sorted[0]?.id ?? '')
+  }, [selectRound])
 
   useEffect(() => {
     getCurrentUser().then(u => {
@@ -47,38 +84,11 @@ export default function GradingConsolePage() {
     if (!authed) return
     fetch('/api/cycles').then(r => r.json()).then((data: RecruitmentCycle[]) => {
       setCycles(data ?? [])
-      if (data?.length) setSelectedCycleId(data[0].id)
+      if (data?.length) void selectCycle(data[0].id)
     })
-  }, [authed])
+  }, [authed, selectCycle])
 
-  useEffect(() => {
-    if (!selectedCycleId) return
-    setSelectedRoundId('')
-    setRounds([])
-    setGraders([])
-    setApplicants([])
-    fetch(`/api/cycles/${selectedCycleId}/rounds`).then(r => r.json()).then((data: Round[]) => {
-      const sorted = (data ?? []).sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-      setRounds(sorted)
-      if (sorted.length) setSelectedRoundId(sorted[0].id)
-    })
-  }, [selectedCycleId])
-
-  const loadStats = useCallback(async (roundId: string) => {
-    setLoading(true)
-    const res = await fetch(`/api/admin/grading-stats?round_id=${roundId}`)
-    const data = await res.json()
-    setGraders(data.graders ?? [])
-    setApplicants(data.applicants ?? [])
-    setLoading(false)
-  }, [])
-
-  useEffect(() => {
-    if (!selectedRoundId) return
-    loadStats(selectedRoundId)
-  }, [selectedRoundId, loadStats])
-
-  function toggleSort(key: typeof sortKey) {
+  function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
   }
@@ -90,9 +100,6 @@ export default function GradingConsolePage() {
     else if (sortKey === 'reviews') diff = a.review_count - b.review_count
     return sortDir === 'asc' ? diff : -diff
   })
-
-  const SortIcon = ({ k }: { k: typeof sortKey }) =>
-    sortKey === k ? <span className="ml-1">{sortDir === 'desc' ? '↓' : '↑'}</span> : null
 
   if (!authed) return null
 
@@ -121,7 +128,7 @@ export default function GradingConsolePage() {
             <label className="text-xs text-[var(--text-muted)] font-medium">Cycle</label>
             <select
               value={selectedCycleId}
-              onChange={e => setSelectedCycleId(e.target.value)}
+              onChange={e => void selectCycle(e.target.value)}
               className="w-fit bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg pl-3 pr-2 py-2 text-[var(--text-primary)] text-sm focus:outline-none focus:border-[#FF6B35]"
             >
               {cycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -131,7 +138,7 @@ export default function GradingConsolePage() {
             <label className="text-xs text-[var(--text-muted)] font-medium">Round</label>
             <select
               value={selectedRoundId}
-              onChange={e => setSelectedRoundId(e.target.value)}
+              onChange={e => selectRound(e.target.value)}
               className="w-fit bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg pl-3 pr-2 py-2 text-[var(--text-primary)] text-sm focus:outline-none focus:border-[#FF6B35]"
               disabled={rounds.length === 0}
             >
@@ -214,20 +221,20 @@ export default function GradingConsolePage() {
                         className="text-left px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
                         onClick={() => toggleSort('name')}
                       >
-                        Name <SortIcon k="name" />
+                        Name <SortIcon active={sortKey === 'name'} direction={sortDir} />
                       </th>
                       <th className="text-left px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Role</th>
                       <th
                         className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
                         onClick={() => toggleSort('reviews')}
                       >
-                        Reviews <SortIcon k="reviews" />
+                        Reviews <SortIcon active={sortKey === 'reviews'} direction={sortDir} />
                       </th>
                       <th
                         className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
                         onClick={() => toggleSort('total')}
                       >
-                        Score <SortIcon k="total" />
+                        Score <SortIcon active={sortKey === 'total'} direction={sortDir} />
                       </th>
                     </tr>
                   </thead>

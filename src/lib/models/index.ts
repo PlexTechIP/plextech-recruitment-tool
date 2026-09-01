@@ -1,13 +1,25 @@
 import mongoose, { Schema, model, models } from 'mongoose'
+import { configureMongooseSecurity } from '@/lib/mongooseConfig'
+
+configureMongooseSecurity()
 
 // ─── Authorized Users ────────────────────────────────────────
 const AuthorizedUserSchema = new Schema({
-  email:    { type: String, required: true, unique: true, lowercase: true },
+  email:    { type: String, required: true, unique: true, lowercase: true, trim: true },
   role:     { type: String, enum: ['grader', 'leadership', 'admin'], default: 'grader' },
-  added_by: { type: String, default: null },
+  added_by: { type: String, default: null, lowercase: true, trim: true },
   added_at: { type: Date, default: Date.now },
+  assignment_write_count: { type: Number, default: 0, min: 0, select: false },
 })
 export const AuthorizedUser = models.AuthorizedUser || model('AuthorizedUser', AuthorizedUserSchema)
+
+// Small singleton documents used to serialize cross-document invariants that
+// MongoDB cannot express as a unique index (for example, retaining one admin).
+const SecurityLockSchema = new Schema({
+  _id:     { type: String },
+  version: { type: Number, required: true, default: 0, min: 0 },
+}, { _id: false })
+export const SecurityLock = models.SecurityLock || model('SecurityLock', SecurityLockSchema)
 
 // ─── Recruitment Cycles ──────────────────────────────────────
 const RecruitmentCycleSchema = new Schema({
@@ -15,8 +27,15 @@ const RecruitmentCycleSchema = new Schema({
   status:                 { type: String, enum: ['active', 'ended'], default: 'active' },
   accepting_applications: { type: Boolean, default: false },
   application_deadline:   { type: Date, default: null },
+  configuration_version:  { type: Number, default: 0, min: 0 },
+  submission_count:       { type: Number, default: 0, min: 0 },
+  lifecycle_write_count:  { type: Number, default: 0, min: 0, select: false },
   created_at:             { type: Date, default: Date.now },
 })
+RecruitmentCycleSchema.index(
+  { accepting_applications: 1 },
+  { unique: true, partialFilterExpression: { accepting_applications: true } },
+)
 export const RecruitmentCycle = models.RecruitmentCycle || model('RecruitmentCycle', RecruitmentCycleSchema)
 
 // ─── Essay Prompts ───────────────────────────────────────────
@@ -36,7 +55,11 @@ const ApplicantSchema = new Schema({
   cycle_id:       { type: Schema.Types.ObjectId, ref: 'RecruitmentCycle', required: true },
   first_name:     { type: String, required: true },
   last_name:      { type: String, required: true },
-  email:          { type: String, default: null },
+  email:          { type: String, required: true, lowercase: true, trim: true },
+  // Intentionally nullable on legacy rows. Only submissions created after the
+  // hardened Google flow carry verifiable provenance.
+  identity_provider:    { type: String, enum: ['google', 'google-berkeley', null], default: null },
+  identity_verified_at: { type: Date, default: null },
   phone:          { type: String, default: null },
   year:           { type: String, default: null },  // Freshman | Sophomore | Junior | Senior (legacy rows: grad year e.g. "2027")
   transfer:       { type: Boolean, default: false },
@@ -47,10 +70,19 @@ const ApplicantSchema = new Schema({
   linkedin:       { type: String, default: null },
   website:        { type: String, default: null },
   time_commitment:{ type: String, default: null },
-  resume_base64:  { type: String, default: null },  // base64-encoded PDF
+  resume_base64:  { type: String, default: null, select: false, maxlength: 4_300_000 }, // base64-encoded PDF
   created_at:     { type: Date, default: Date.now },
 })
-ApplicantSchema.index({ cycle_id: 1, email: 1 }, { unique: true })
+ApplicantSchema.index(
+  { cycle_id: 1, email: 1 },
+  {
+    unique: true,
+    name: 'uniq_cycle_email_ci_v1',
+    collation: { locale: 'en', strength: 2 },
+    partialFilterExpression: { email: { $type: 'string' } },
+  },
+)
+ApplicantSchema.index({ cycle_id: 1, created_at: 1 })
 export const Applicant = models.Applicant || model('Applicant', ApplicantSchema)
 
 // ─── Public API Rate Limits ──────────────────────────────────
@@ -68,7 +100,7 @@ export const RateLimit = models.RateLimit || model('RateLimit', RateLimitSchema)
 const EssayResponseSchema = new Schema({
   applicant_id: { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
   prompt_id:    { type: Schema.Types.ObjectId, ref: 'EssayPrompt', required: true },
-  response:     { type: String, required: true },
+  response:     { type: String, required: true, maxlength: 1500 },
 })
 EssayResponseSchema.index({ applicant_id: 1, prompt_id: 1 }, { unique: true })
 export const EssayResponse = models.EssayResponse || model('EssayResponse', EssayResponseSchema)
@@ -82,16 +114,13 @@ const RoundSchema = new Schema({
   status:             { type: String, enum: ['pending', 'grading', 'deliberating', 'ended'], default: 'pending' },
   interview_form_url: { type: String, default: null },
   role:               { type: String, enum: ['curriculum', 'developer', null], default: null },
+  review_submission_count: { type: Number, default: 0, min: 0 },
+  lifecycle_write_count: { type: Number, default: 0, min: 0, select: false },
   created_at:         { type: Date, default: Date.now },
 })
-// One round per (cycle, role, order_index). Partial filter so legacy null-role rounds
-// don't trip the index — only role-tagged rounds are constrained.
 RoundSchema.index(
   { cycle_id: 1, role: 1, order_index: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { role: { $type: 'string' } },
-  },
+  { unique: true, name: 'uniq_round_position_v2' },
 )
 export const Round = models.Round || model('Round', RoundSchema)
 
@@ -99,23 +128,39 @@ export const Round = models.Round || model('Round', RoundSchema)
 const GraderAssignmentSchema = new Schema({
   round_id:     { type: Schema.Types.ObjectId, ref: 'Round', required: true },
   applicant_id: { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
-  grader_email: { type: String, required: true, lowercase: true },
+  grader_email: { type: String, required: true, lowercase: true, trim: true },
   assigned_at:  { type: Date, default: Date.now },
+  submission_count: { type: Number, default: 0, min: 0 },
 })
 GraderAssignmentSchema.index({ round_id: 1, applicant_id: 1, grader_email: 1 }, { unique: true })
+GraderAssignmentSchema.index({ grader_email: 1, round_id: 1, applicant_id: 1 })
+GraderAssignmentSchema.index({ grader_email: 1, applicant_id: 1 })
 export const GraderAssignment = models.GraderAssignment || model('GraderAssignment', GraderAssignmentSchema)
 
 // ─── Reviews ─────────────────────────────────────────────────
 const ReviewSchema = new Schema({
   round_id:     { type: Schema.Types.ObjectId, ref: 'Round', required: true },
   applicant_id: { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
-  grader_email: { type: String, required: true, lowercase: true },
-  r0: Number, r1: Number, r2: Number, r3: Number, r4: Number,
-  r5: Number, r6: Number, r7: Number, r8: Number, r9: Number,
-  comment0: String, comment1: String, comment2: String, comment3: String, comment4: String,
+  grader_email: { type: String, required: true, lowercase: true, trim: true },
+  r0: { type: Number, required: true, min: 1, max: 3 },
+  r1: { type: Number, required: true, min: 1, max: 4 },
+  r2: { type: Number, required: true, min: 1, max: 4 },
+  r3: { type: Number, required: true, min: 1, max: 4 },
+  r4: { type: Number, required: true, min: 1, max: 4 },
+  r5: { type: Number, required: true, min: 1, max: 4 },
+  r6: { type: Number, required: true, min: 1, max: 4 },
+  r7: { type: Number, required: true, min: 1, max: 4 },
+  r8: { type: Number, required: true, min: 1, max: 4 },
+  r9: { type: Number, required: true, min: 1, max: 4 },
+  comment0: { type: String, required: true, trim: true, maxlength: 2000 },
+  comment1: { type: String, required: true, trim: true, maxlength: 2000 },
+  comment2: { type: String, required: true, trim: true, maxlength: 2000 },
+  comment3: { type: String, required: true, trim: true, maxlength: 2000 },
+  comment4: { type: String, required: true, trim: true, maxlength: 2000 },
   submitted_at: { type: Date, default: Date.now },
 })
 ReviewSchema.index({ round_id: 1, applicant_id: 1, grader_email: 1 }, { unique: true })
+ReviewSchema.index({ grader_email: 1, round_id: 1, applicant_id: 1 })
 export const Review = models.Review || model('Review', ReviewSchema)
 
 // ─── Sessions (Deliberation) ─────────────────────────────────
@@ -124,18 +169,19 @@ const SessionSchema = new Schema({
   round_id:   { type: Schema.Types.ObjectId, ref: 'Round', default: null },
   name:       { type: String, required: true },
   status:     { type: String, enum: ['active', 'ended'], default: 'active' },
-  created_by: { type: String, required: true },
+  created_by: { type: String, required: true, lowercase: true, trim: true },
   anonymous:  { type: Boolean, default: false },
   role:       { type: String, enum: ['curriculum', 'developer', null], default: null },
+  candidate_import_count: { type: Number, default: 0, min: 0 },
+  activity_write_count: { type: Number, default: 0, min: 0, select: false },
   created_at: { type: Date, default: Date.now },
 }, { _id: false })
-// One active session per (round_id, role). Partial filter excludes legacy null-role rows
-// and ended sessions so this can be added without a data migration.
 SessionSchema.index(
   { round_id: 1, role: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: 'active', role: { $type: 'string' } },
+    name: 'uniq_active_session_role_v2',
+    partialFilterExpression: { status: 'active', round_id: { $type: 'objectId' } },
   },
 )
 export const Session = models.Session || model('Session', SessionSchema)
@@ -147,15 +193,25 @@ const CandidateSchema = new Schema({
   name:         { type: String, required: true },
   data:         { type: Schema.Types.Mixed, default: {} },
   status:       { type: String, enum: ['pending', 'accepted', 'rejected', 'hold'], default: 'pending' },
+  activity_write_count: { type: Number, default: 0, min: 0, select: false },
   created_at:   { type: Date, default: Date.now },
 })
+CandidateSchema.index({ session_id: 1, created_at: 1 })
+CandidateSchema.index(
+  { session_id: 1, applicant_id: 1 },
+  {
+    unique: true,
+    name: 'uniq_session_applicant_v1',
+    partialFilterExpression: { applicant_id: { $type: 'objectId' } },
+  },
+)
 export const Candidate = models.Candidate || model('Candidate', CandidateSchema)
 
 // ─── Votes ───────────────────────────────────────────────────
 const VoteSchema = new Schema({
   candidate_id: { type: Schema.Types.ObjectId, ref: 'Candidate', required: true },
   voter_name:   { type: String, required: true },           // display name (UI)
-  voter_email:  { type: String, default: null, lowercase: true }, // owner (auth) — null on legacy rows
+  voter_email:  { type: String, default: null, lowercase: true, trim: true }, // owner (auth) — null on legacy rows
   vote_type:    { type: String, enum: ['vouch', 'anti_vouch', 'red_flag'], required: true },
 })
 // Sparse unique: only enforced on rows that have a voter_email (i.e. created after the migration).
@@ -169,18 +225,36 @@ export const Vote = models.Vote || model('Vote', VoteSchema)
 const CandidateNoteSchema = new Schema({
   candidate_id: { type: Schema.Types.ObjectId, ref: 'Candidate', required: true },
   author:       { type: String, required: true },                 // display name (UI)
-  author_email: { type: String, default: null, lowercase: true }, // owner (auth); null on legacy rows
+  author_email: { type: String, default: null, lowercase: true, trim: true }, // owner (auth); null on legacy rows
   content:      { type: String, required: true },
   type:         { type: String, enum: ['note', 'red_flag'], default: 'note' },
   created_at:   { type: Date, default: Date.now },
 })
+CandidateNoteSchema.index({ candidate_id: 1, created_at: 1 })
 export const CandidateNote = models.CandidateNote || model('CandidateNote', CandidateNoteSchema)
+
+// ─── Imported Coffee Chat Notes ─────────────────────────────
+// Cycle-scoped so one import is available in every deliberation round.
+const CoffeeChatNoteSchema = new Schema({
+  cycle_id:       { type: Schema.Types.ObjectId, ref: 'RecruitmentCycle', required: true },
+  applicant_id:   { type: Schema.Types.ObjectId, ref: 'Applicant', required: true },
+  applicant_name: { type: String, required: true },
+  chatter_name:   { type: String, required: true },
+  notes:          { type: String, default: '' },
+  chat_date:      { type: String, default: null }, // YYYY-MM-DD; date-only avoids timezone shifts
+  other_notes:    { type: String, default: null },
+  imported_by:    { type: String, required: true, lowercase: true, trim: true },
+  imported_at:    { type: Date, default: Date.now },
+})
+CoffeeChatNoteSchema.index({ cycle_id: 1, applicant_id: 1, chat_date: 1 })
+export const CoffeeChatNote = models.CoffeeChatNote || model('CoffeeChatNote', CoffeeChatNoteSchema)
 
 // ─── Session Members ─────────────────────────────────────────
 const SessionMemberSchema = new Schema({
   session_id: { type: String, ref: 'Session', required: true },
-  user_email: { type: String, required: true, lowercase: true },
+  user_email: { type: String, required: true, lowercase: true, trim: true },
   joined_at:  { type: Date, default: Date.now },
+  activity_write_count: { type: Number, default: 0, min: 0, select: false },
 })
 SessionMemberSchema.index({ session_id: 1, user_email: 1 }, { unique: true })
 export const SessionMember = models.SessionMember || model('SessionMember', SessionMemberSchema)
@@ -189,8 +263,8 @@ export const SessionMember = models.SessionMember || model('SessionMember', Sess
 // Emails barred from joining a specific deliberation session.
 const SessionBanSchema = new Schema({
   session_id: { type: String, ref: 'Session', required: true },
-  email:      { type: String, required: true, lowercase: true },
-  banned_by:  { type: String, required: true, lowercase: true },
+  email:      { type: String, required: true, lowercase: true, trim: true },
+  banned_by:  { type: String, required: true, lowercase: true, trim: true },
   banned_at:  { type: Date, default: Date.now },
 })
 SessionBanSchema.index({ session_id: 1, email: 1 }, { unique: true })

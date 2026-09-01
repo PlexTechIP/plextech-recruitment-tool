@@ -28,6 +28,32 @@ const STATUS_COLOR: Record<RoundStatus, string> = {
   ended:         'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)]',
 }
 
+type CoffeeChatPreview = {
+  header_row: number
+  source_rows: number
+  coffee_chat_rows: number
+  matched_rows: {
+    source_row: number
+    applicant_id: string
+    applicant_name: string
+    chatter_name: string
+    notes: string
+    chat_date: string | null
+    other_notes: string | null
+  }[]
+  issues: { row: number; applicant_name: string; reason: string }[]
+}
+
+const normalizeName = (value: string) =>
+  value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ')
+
+function formatDeadlineInput(deadline: string | null | undefined) {
+  if (!deadline) return ''
+  const date = new Date(deadline)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 // ─── main page ───────────────────────────────────────────────
 export default function AdminPage() {
   const router = useRouter()
@@ -80,9 +106,6 @@ export default function AdminPage() {
   const [interviewFormUrl, setInterviewFormUrl] = useState<string>('')
   const [formUrlSaving, setFormUrlSaving] = useState(false)
 
-  // Track previous cycle ID so we only reset deadline input when switching cycles
-  const prevCycleIdRef = useRef<string | null>(null)
-
   // Interview CSV import
   const interviewFileRef = useRef<HTMLInputElement>(null)
   const [interviewCsvText, setInterviewCsvText] = useState<string>('')
@@ -92,6 +115,35 @@ export default function AdminPage() {
   const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; texts: Record<string, string>; avg: number }[] | null>(null)
   const [interviewImporting, setInterviewImporting] = useState(false)
   const [interviewMessage, setInterviewMessage] = useState('')
+
+  // Cycle-wide coffee chat CSV import
+  const coffeeChatFileRef = useRef<HTMLInputElement>(null)
+  const [coffeeChatCsvText, setCoffeeChatCsvText] = useState('')
+  const [coffeeChatPreview, setCoffeeChatPreview] = useState<CoffeeChatPreview | null>(null)
+  const [coffeeChatLoading, setCoffeeChatLoading] = useState(false)
+  const [coffeeChatMessage, setCoffeeChatMessage] = useState('')
+
+  const selectRound = useCallback((round: Round | null) => {
+    setSelectedRound(round)
+    setGradingProgress(null)
+    setInterviewFormUrl(round?.interview_form_url ?? '')
+    setInterviewPreview(null)
+    setInterviewCsvText('')
+    setInterviewMessage('')
+    setRoundSessions([])
+  }, [])
+
+  const selectCycle = useCallback((cycle: RecruitmentCycle | null) => {
+    setSelectedCycle(cycle)
+    setDeadlineInput(formatDeadlineInput(cycle?.application_deadline))
+    selectRound(null)
+    setDelibMessage('')
+    setAssignMessage('')
+    setPromptMessage('')
+    setCoffeeChatMessage('')
+    setCoffeeChatPreview(null)
+    setCoffeeChatCsvText('')
+  }, [selectRound])
 
   // ── auth ─────────────────────────────────────────────────
   useEffect(() => {
@@ -109,20 +161,29 @@ export default function AdminPage() {
     setCycles(data ?? [])
   }, [])
 
-  useEffect(() => { if (!loading) loadCycles() }, [loading, loadCycles])
-
   // Restore previously selected cycle from sessionStorage once cycles load.
   // Gate the persist effect on this ref so the initial null state doesn't
   // wipe the saved id before we get a chance to read it.
   const cycleRestoredRef = useRef(false)
   useEffect(() => {
-    if (cycleRestoredRef.current || cycles.length === 0) return
-    cycleRestoredRef.current = true
-    const savedId = sessionStorage.getItem('admin:selectedCycleId')
-    if (!savedId) return
-    const match = cycles.find(c => c.id === savedId)
-    if (match) setSelectedCycle(match)
-  }, [cycles])
+    if (loading) return
+    let cancelled = false
+
+    async function initializeCycles() {
+      const data: RecruitmentCycle[] = await fetch('/api/cycles').then(r => r.json())
+      if (cancelled) return
+      setCycles(data ?? [])
+      if (cycleRestoredRef.current) return
+
+      cycleRestoredRef.current = true
+      const savedId = sessionStorage.getItem('admin:selectedCycleId')
+      const match = savedId ? data.find(cycle => cycle.id === savedId) : null
+      if (match) selectCycle(match)
+    }
+
+    void initializeCycles()
+    return () => { cancelled = true }
+  }, [loading, selectCycle])
 
   useEffect(() => {
     if (!cycleRestoredRef.current) return
@@ -149,7 +210,7 @@ export default function AdminPage() {
     const data: RecruitmentCycle = await res.json()
     setNewCycleName('')
     await loadCycles()
-    setSelectedCycle(data)
+    selectCycle(data)
     setCycleLoading(false)
   }
 
@@ -172,7 +233,7 @@ export default function AdminPage() {
       body: JSON.stringify({ status: 'ended', accepting_applications: false }),
     })
     await loadCycles()
-    if (selectedCycle?.id === cycle.id) setSelectedCycle(null)
+    if (selectedCycle?.id === cycle.id) selectCycle(null)
   }
 
   // ── prompts ──────────────────────────────────────────────
@@ -186,63 +247,53 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (selectedCycle) {
-      loadPrompts(selectedCycle.id)
-      loadRounds(selectedCycle.id)
-      loadAnalytics(selectedCycle.id)
-      setSelectedRound(null)
-      setDelibMessage('')
-      setAssignMessage('')
-      setPromptMessage('')
-      setInterviewMessage('')
-      setInterviewPreview(null)
-      setInterviewCsvText('')
-    }
-  }, [selectedCycle, loadPrompts])
+    const cycleId = selectedCycle?.id
+    if (!cycleId) return
+    let cancelled = false
 
-  // Only reset deadline input when switching to a different cycle.
-  // datetime-local inputs expect LOCAL wall-clock time, so format manually —
-  // toISOString() would render UTC and show a time shifted by the tz offset.
-  useEffect(() => {
-    if (selectedCycle?.id === prevCycleIdRef.current) return
-    prevCycleIdRef.current = selectedCycle?.id ?? null
-    if (!selectedCycle?.application_deadline) { setDeadlineInput(''); return }
-    const d = new Date(selectedCycle.application_deadline)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    setDeadlineInput(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
-  }, [selectedCycle])
+    async function loadCycleDetails() {
+      await Promise.all([
+        loadPrompts(cycleId!),
+        loadRounds(cycleId!),
+        loadAnalytics(cycleId!),
+      ])
+      if (cancelled) return
+    }
+
+    void loadCycleDetails()
+    return () => { cancelled = true }
+  }, [selectedCycle, loadPrompts])
 
   // Load grading progress or interview form URL when round changes
   useEffect(() => {
-    setGradingProgress(null)
-    setInterviewFormUrl('')
-    setInterviewPreview(null)
-    setInterviewCsvText('')
-    setInterviewMessage('')
-    setRoundSessions([])
-    if (!selectedRound) return
-    fetch(`/api/sessions?round_id=${selectedRound.id}`)
-      .then(r => r.json())
-      .then((data: { id: string; status: string; role: 'curriculum' | 'developer' | null }[]) => {
-        if (Array.isArray(data)) setRoundSessions(data)
-      })
-      .catch(() => {})
-    if (selectedRound.grading_type === 'rubric') {
-      fetch(`/api/admin/grading-stats?round_id=${selectedRound.id}`)
-        .then(r => r.json())
-        .then(data => {
-          const graders: { email: string; assigned: number; completed: number }[] = data.graders ?? []
-          setGradingProgress({
-            totalAssignments: graders.reduce((s, g) => s + g.assigned, 0),
-            completedReviews: graders.reduce((s, g) => s + g.completed, 0),
-            graders,
-          })
+    const roundId = selectedRound?.id
+    const gradingType = selectedRound?.grading_type
+    if (!roundId) return
+    let cancelled = false
+
+    async function loadRoundDetails() {
+      const [sessions, stats] = await Promise.all([
+        fetch(`/api/sessions?round_id=${roundId}`).then(r => r.json()).catch(() => []),
+        gradingType === 'rubric'
+          ? fetch(`/api/admin/grading-stats?round_id=${roundId}`).then(r => r.json())
+          : Promise.resolve(null),
+      ])
+      if (cancelled) return
+
+      if (Array.isArray(sessions)) setRoundSessions(sessions)
+      if (stats) {
+        const graders: { email: string; assigned: number; completed: number }[] = stats.graders ?? []
+        setGradingProgress({
+          totalAssignments: graders.reduce((sum, grader) => sum + grader.assigned, 0),
+          completedReviews: graders.reduce((sum, grader) => sum + grader.completed, 0),
+          graders,
         })
+      }
     }
-    if (selectedRound.grading_type === 'interview') {
-      setInterviewFormUrl(selectedRound.interview_form_url ?? '')
-    }
-  }, [selectedRound])
+
+    void loadRoundDetails()
+    return () => { cancelled = true }
+  }, [selectedRound?.id, selectedRound?.grading_type])
 
   async function savePrompts() {
     if (!selectedCycle) return
@@ -333,25 +384,10 @@ export default function AdminPage() {
     }
   }
 
-  async function tagSessionRole(sessionId: string, role: 'curriculum' | 'developer') {
-    const res = await fetch(`/api/sessions/${sessionId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(`Could not tag session: ${err?.error ?? res.statusText}`)
-      return
-    }
-    // Refresh the session list for the selected round
-    setRoundSessions(prev => prev.map(s => s.id === sessionId ? { ...s, role } : s))
-  }
-
   async function deleteRound(round: Round) {
     if (!confirm(`Delete round "${round.name}"? This will also delete all grader assignments and reviews for this round.`)) return
     await fetch(`/api/rounds/${round.id}`, { method: 'DELETE' })
-    if (selectedRound?.id === round.id) setSelectedRound(null)
+    if (selectedRound?.id === round.id) selectRound(null)
     await loadRounds(selectedCycle!.id)
   }
 
@@ -472,7 +508,7 @@ export default function AdminPage() {
     }
     const newRound: Round = await roundRes.json()
     await loadRounds(selectedCycle.id)
-    setSelectedRound(newRound)
+    selectRound(newRound)
 
     // Assign graders
     const [allUsers, appsData] = await Promise.all([
@@ -666,12 +702,23 @@ export default function AdminPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
       })
-      const candidates = interviewPreview.map((c, idx) => ({
+      const cycleApplicants: Applicant[] = await fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json())
+      const applicantsByName = new Map<string, Applicant[]>()
+      for (const applicant of cycleApplicants) {
+        const key = normalizeName(`${applicant.first_name} ${applicant.last_name}`)
+        applicantsByName.set(key, [...(applicantsByName.get(key) ?? []), applicant])
+      }
+
+      const candidates = interviewPreview.map((c, idx) => {
+        const matches = applicantsByName.get(normalizeName(c.name)) ?? []
+        return {
         session_id: sessionId,
+        applicant_id: matches.length === 1 ? matches[0].id : null,
         name: c.name,
         status: 'pending',
         data: { score: c.avg, candidate_number: idx + 1, ...c.scores, ...c.texts },
-      }))
+        }
+      })
       await fetch(`/api/sessions/${sessionId}/candidates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -684,6 +731,58 @@ export default function AdminPage() {
       setInterviewMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`)
     } finally {
       setInterviewImporting(false)
+    }
+  }
+
+  // ── coffee chat CSV import ───────────────────────────────
+  async function previewCoffeeChats() {
+    if (!selectedCycle || !coffeeChatCsvText.trim()) return
+    setCoffeeChatLoading(true)
+    setCoffeeChatMessage('')
+    setCoffeeChatPreview(null)
+    try {
+      const res = await fetch('/api/coffee-chat-notes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle_id: selectedCycle.id, csv_text: coffeeChatCsvText, action: 'preview' }),
+      })
+      const data = await res.json()
+      if (data.preview) setCoffeeChatPreview(data.preview)
+      if (!res.ok) throw new Error(data.error ?? 'Could not preview coffee-chat CSV.')
+      setCoffeeChatMessage(`${data.preview.matched_rows.length} coffee chats matched successfully.`)
+    } catch (error) {
+      setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setCoffeeChatLoading(false)
+    }
+  }
+
+  async function importCoffeeChats() {
+    if (!selectedCycle || !coffeeChatPreview || coffeeChatPreview.issues.length > 0) return
+    const confirmed = confirm(
+      `Replace all imported coffee-chat notes for ${selectedCycle.name} with ` +
+      `${coffeeChatPreview.matched_rows.length} rows from this CSV?`,
+    )
+    if (!confirmed) return
+
+    setCoffeeChatLoading(true)
+    setCoffeeChatMessage('')
+    try {
+      const res = await fetch('/api/coffee-chat-notes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle_id: selectedCycle.id, csv_text: coffeeChatCsvText, action: 'commit' }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (data.preview) setCoffeeChatPreview(data.preview)
+        throw new Error(data.error ?? 'Coffee-chat import failed.')
+      }
+      setCoffeeChatMessage(`Imported ${data.imported} coffee chats for ${data.applicants} applicants.`)
+    } catch (error) {
+      setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setCoffeeChatLoading(false)
     }
   }
 
@@ -855,7 +954,7 @@ export default function AdminPage() {
               {cycles.map(cycle => (
                 <button
                   key={cycle.id}
-                  onClick={() => setSelectedCycle(cycle)}
+                  onClick={() => selectCycle(cycle)}
                   className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
                     selectedCycle?.id === cycle.id
                       ? 'bg-[var(--bg-active)] border-[#FF6B35]/40'
@@ -1086,7 +1185,7 @@ export default function AdminPage() {
                       : 'bg-[var(--bg-raised)] border-[var(--border)]'
                   }`}>
                     <button
-                      onClick={() => { setSelectedRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
+                      onClick={() => { selectRound(round); setDelibMessage(''); setAssignMessage(''); setTimeout(() => roundDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50) }}
                       className="flex-1 text-left px-4 py-3"
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -1411,6 +1510,118 @@ export default function AdminPage() {
                     </div>
                   </>
                 )}
+
+                {/* Cycle-wide coffee chat import (shared by application + interview deliberations) */}
+                <div className="pt-3 border-t border-[var(--border)] space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Import Coffee Chat Notes</p>
+                    <p className="text-xs text-[var(--text-muted)] mt-1">
+                      Upload or paste the coffee-chat CSV. A successful import replaces the coffee-chat dataset for {selectedCycle?.name} and appears in every deliberation round in this cycle.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => coffeeChatFileRef.current?.click()}
+                      className="text-sm px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                    >
+                      Upload CSV
+                    </button>
+                    <input
+                      ref={coffeeChatFileRef}
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="hidden"
+                      onChange={async e => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        const text = await file.text()
+                        setCoffeeChatCsvText(text)
+                        setCoffeeChatPreview(null)
+                        setCoffeeChatMessage('')
+                        if (coffeeChatFileRef.current) coffeeChatFileRef.current.value = ''
+                      }}
+                    />
+                  </div>
+                  <textarea
+                    value={coffeeChatCsvText}
+                    onChange={e => {
+                      setCoffeeChatCsvText(e.target.value)
+                      setCoffeeChatPreview(null)
+                      setCoffeeChatMessage('')
+                    }}
+                    placeholder="Or paste coffee-chat CSV here..."
+                    rows={4}
+                    className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35] resize-none"
+                  />
+                  <button
+                    onClick={previewCoffeeChats}
+                    disabled={coffeeChatLoading || !coffeeChatCsvText.trim()}
+                    className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {coffeeChatLoading ? 'Checking CSV...' : 'Preview Coffee Chats'}
+                  </button>
+
+                  {coffeeChatPreview && (
+                    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60 p-3 space-y-3">
+                      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--text-muted)]">
+                        <span>Header row: {coffeeChatPreview.header_row}</span>
+                        <span>Coffee chats: {coffeeChatPreview.coffee_chat_rows}</span>
+                        <span>Matched: {coffeeChatPreview.matched_rows.length}</span>
+                        <span className={coffeeChatPreview.issues.length ? 'text-red-400' : 'text-green-400'}>
+                          Issues: {coffeeChatPreview.issues.length}
+                        </span>
+                      </div>
+
+                      {coffeeChatPreview.issues.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          {coffeeChatPreview.issues.map(issue => (
+                            <p key={`${issue.row}-${issue.applicant_name}-${issue.reason}`} className="text-xs text-red-400">
+                              Row {issue.row}{issue.applicant_name ? ` · ${issue.applicant_name}` : ''}: {issue.reason}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
+                      {coffeeChatPreview.issues.length === 0 && coffeeChatPreview.matched_rows.length > 0 && (
+                        <>
+                          <div className="max-h-44 overflow-y-auto rounded-md border border-[var(--border)]">
+                            <table className="w-full text-xs">
+                              <thead className="bg-[var(--bg-raised)] sticky top-0">
+                                <tr>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Applicant</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Coffee chatter</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Date</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[var(--border)]">
+                                {coffeeChatPreview.matched_rows.map(row => (
+                                  <tr key={row.source_row}>
+                                    <td className="px-3 py-1.5 text-[var(--text-primary)]">{row.applicant_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-secondary)]">{row.chatter_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-muted)]">{row.chat_date ?? '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <button
+                            onClick={importCoffeeChats}
+                            disabled={coffeeChatLoading}
+                            className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer disabled:cursor-not-allowed"
+                          >
+                            {coffeeChatLoading ? 'Importing...' : 'Replace Cycle Coffee Chats'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {coffeeChatMessage && (
+                    <p className={`text-sm ${coffeeChatMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                      {coffeeChatMessage}
+                    </p>
+                  )}
+                </div>
 
                 {/* ── Delib-only round ── */}
                 {!selectedRound.grading_type && (

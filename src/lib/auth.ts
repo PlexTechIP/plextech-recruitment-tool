@@ -11,7 +11,7 @@ export interface CurrentUser {
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const session = await getSession()
   const user = session?.user as ({ role?: string; email?: string | null; name?: string | null }) | undefined
-  if (!user?.email) return null
+  if (!user?.email || !['grader', 'leadership', 'admin'].includes(user.role ?? '')) return null
   return {
     id: user.email,
     email: user.email,

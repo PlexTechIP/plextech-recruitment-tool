@@ -3,13 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "dev": "next dev --port 5173",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test:security": "node scripts/security-unit.mjs",
+    "test:indexes": "node scripts/verify-indexes.mjs",
+    "db:security:preflight": "node scripts/migrate-security-indexes.mjs",
+    "db:security:apply": "node scripts/migrate-security-indexes.mjs --apply",
+    "test:race": "node scripts/race-toctou.mjs",
+    "test:load": "node scripts/loadtest.mjs",
+    "preopen:static": "npm run lint && npm run typecheck && npm run test:security && npm run build && npm audit --audit-level=high"
   },
   "dependencies": {
     "@types/papaparse": "^5.5.2",
@@ -17,6 +25,7 @@
     "next": "16.3.1",
     "next-auth": "^4.24.15",
     "papaparse": "^5.5.3",
+    "pdf-lib": "1.17.1",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

@@ -18,6 +18,7 @@ type CKey = 'comment0' | 'comment1' | 'comment2' | 'comment3' | 'comment4'
 interface ApplicantFull extends Applicant {
   essays: { prompt: EssayPrompt; response: string }[]
   resumeBase64: string | null
+  resumeLoaded: boolean
 }
 
 interface RoundSummary {
@@ -52,26 +53,32 @@ export default function GradePage() {
   const [loadingQueue, setLoadingQueue] = useState(false)
   const resumeRef = useRef<HTMLDivElement>(null)
 
-  // Auth
-  useEffect(() => {
-    getCurrentUser().then(u => {
-      if (!u) { router.replace('/'); return }
-      setUser(u)
-    })
-  }, [router])
-
   // Scroll to resume section when essay confirmed
   useEffect(() => {
     if (essayConfirmed) resumeRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [essayConfirmed])
 
-  // Load round summaries whenever user is set
+  // Resumes can be several megabytes each. Load only the current applicant's
+  // file, and only after the grader finishes the essay section, instead of
+  // downloading every pending resume when the queue opens.
   useEffect(() => {
-    if (!user) return
-    loadRoundSummaries(user.email)
-  }, [user])
+    const current = queue[queueIndex]
+    if (!essayConfirmed || !current || current.resumeLoaded) return
 
-  async function loadRoundSummaries(graderEmail: string) {
+    let cancelled = false
+    fetch(`/api/applicants/${current.id}/resume`, { cache: 'no-store' })
+      .then(response => response.ok ? response.json() : { resume_base64: null })
+      .then(data => {
+        if (cancelled) return
+        setQueue(previous => previous.map((item, index) => index === queueIndex
+          ? { ...item, resumeBase64: data.resume_base64 ?? null, resumeLoaded: true }
+          : item))
+      })
+
+    return () => { cancelled = true }
+  }, [essayConfirmed, queue, queueIndex])
+
+  async function loadRoundSummaries(graderEmail: string): Promise<string | null> {
     setLoadingRounds(true)
 
     // All assignments for this grader
@@ -82,7 +89,7 @@ export default function GradePage() {
     if (!assignments?.length) {
       setRoundSummaries([])
       setLoadingRounds(false)
-      return
+      return null
     }
 
     // All reviews already submitted by this grader
@@ -129,22 +136,15 @@ export default function GradePage() {
 
     setRoundSummaries(summaries)
 
-    // Closed and deliberating rounds stay out of the grading queue.
-    // Auto-select only an active grading round when it is the sole pending one.
+    // Closed and deliberating rounds stay out of the grading queue. Auto-select
+    // only an active grading round when it is the sole pending one.
     const pending = summaries.filter(s => s.completed < s.total)
-    setSelectedRoundId(current => {
-      if (current && summaries.some(s => s.round.id === current)) return current
-      return pending.length === 1 ? pending[0].round.id : null
-    })
+    const solePendingRoundId = pending.length === 1 ? pending[0].round.id : null
+    setSelectedRoundId(solePendingRoundId)
 
     setLoadingRounds(false)
+    return solePendingRoundId
   }
-
-  // Load queue when round is selected
-  useEffect(() => {
-    if (!selectedRoundId || !user) return
-    loadQueue(selectedRoundId, user.email)
-  }, [selectedRoundId, user])
 
   async function loadQueue(roundId: string, graderEmail: string) {
     setLoadingQueue(true)
@@ -177,26 +177,39 @@ export default function GradePage() {
       return
     }
 
-    // Load essays+prompts for each pending applicant
+    // Load the relatively small essay payloads for the queue. Resume files are
+    // deliberately fetched one at a time after essay confirmation.
     const fullQueue: ApplicantFull[] = await Promise.all(
       pendingIds.map(async (applicantId) => {
-        const [essayData, resumeData] = await Promise.all([
-          fetch(`/api/applicants/${applicantId}/essays`).then(r => r.ok ? r.json() : null),
-          fetch(`/api/applicants/${applicantId}/resume`).then(r => r.ok ? r.json() : null),
-        ])
+        const essayData = await fetch(`/api/applicants/${applicantId}/essays`, { cache: 'no-store' })
+          .then(r => r.ok ? r.json() : null)
 
         // essayData shape: { applicant: Applicant, essays: { prompt: EssayPrompt, response: string }[] }
         const applicant: Applicant = essayData?.applicant ?? { id: applicantId }
         const essays: { prompt: EssayPrompt; response: string }[] = essayData?.essays ?? []
-        const resumeBase64: string | null = resumeData?.resume_base64 ?? null
-
-        return { ...applicant, essays, resumeBase64 }
+        return { ...applicant, essays, resumeBase64: null, resumeLoaded: false }
       })
     )
 
     setQueue(fullQueue)
     setLoadingQueue(false)
   }
+
+  // Resolve auth and then load the initial queue from the asynchronous auth
+  // callback. Round changes after this point are explicit user actions.
+  useEffect(() => {
+    let cancelled = false
+    getCurrentUser().then(async currentUser => {
+      if (cancelled) return
+      if (!currentUser) { router.replace('/'); return }
+      setUser(currentUser)
+      const solePendingRoundId = await loadRoundSummaries(currentUser.email)
+      if (!cancelled && solePendingRoundId) {
+        await loadQueue(solePendingRoundId, currentUser.email)
+      }
+    })
+    return () => { cancelled = true }
+  }, [router])
 
   function setRating(key: RKey, value: string) {
     setRatings(prev => ({ ...prev, [key]: value }))
@@ -313,7 +326,10 @@ export default function GradePage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => setSelectedRoundId(round.id)}
+                        onClick={() => {
+                          setSelectedRoundId(round.id)
+                          void loadQueue(round.id, user.email)
+                        }}
                         disabled={pending === 0}
                         className="w-full text-left bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5 hover:bg-[var(--bg-raised)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                       >
@@ -522,11 +538,15 @@ export default function GradePage() {
           {essayConfirmed && (
             <>
               <Section label="Resume / CV">
-                {applicant.resumeBase64 ? (
+                {!applicant.resumeLoaded ? (
+                  <p className="text-sm text-[var(--text-muted)] italic">Loading resume...</p>
+                ) : applicant.resumeBase64 ? (
                   <iframe
                     src={`data:application/pdf;base64,${applicant.resumeBase64}`}
                     className="w-full rounded-lg border border-[var(--border)]"
                     style={{ height: '70vh' }}
+                    title={`${applicant.first_name ?? ''} ${applicant.last_name ?? ''} resume`}
+                    sandbox=""
                   />
                 ) : (
                   <p className="text-sm text-[var(--text-muted)] italic">No resume uploaded.</p>

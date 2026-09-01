@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import { getCurrentUser, canCreateSession, canManageUsers, CurrentUser } from '@/lib/auth'
@@ -103,16 +104,17 @@ export default function Dashboard() {
     const sessionId = joinSessionId.trim().toUpperCase()
     if (!sessionId) { setJoinError('Enter a session ID.'); setJoinLoading(false); return }
 
-    const res = await fetch(`/api/sessions/${sessionId}`)
-    if (!res.ok) { setJoinError('Session not found.'); setJoinLoading(false); return }
-    const session = await res.json()
-    if (session.status === 'ended') { setJoinError('This session has ended.'); setJoinLoading(false); return }
-
-    await fetch('/api/session-members', {
+    const res = await fetch('/api/session-members', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, user_email: currentUser!.email }),
     })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      setJoinError(error.error ?? 'Session not found.')
+      setJoinLoading(false)
+      return
+    }
     router.push(`/session/${sessionId}`)
   }
 
@@ -202,7 +204,6 @@ export default function Dashboard() {
 
   const user = currentUser!
   const isAdmin = user.role === 'admin'
-  const isLeadership = user.role === 'leadership' || isAdmin
 
   const ROLE_BADGE: Record<UserRole, string> = {
     admin:      'bg-purple-500/15 text-purple-400 border-purple-500/30',
@@ -214,7 +215,14 @@ export default function Dashboard() {
     <main className="min-h-screen bg-[var(--bg-base)] flex flex-col">
       <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="plex-gradient-text text-xs font-bold uppercase tracking-widest">PlexTech</span>
+          <Image
+            src="/PlexTechLogo.png"
+            alt="PlexTech"
+            width={23}
+            height={34}
+            className="h-8 w-auto shrink-0"
+            priority
+          />
           <span className="text-[var(--border)]">|</span>
           <h1 className="font-bold text-[var(--text-primary)]">Deliberations</h1>
         </div>

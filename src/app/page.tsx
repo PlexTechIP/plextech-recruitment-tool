@@ -11,7 +11,8 @@ export default function Home() {
   const { data: session, status } = useSession()
 
   useEffect(() => {
-    if (session) router.replace('/dashboard')
+    const role = (session?.user as { role?: string } | undefined)?.role
+    if (role === 'grader' || role === 'leadership' || role === 'admin') router.replace('/dashboard')
   }, [session, router])
 
   if (status === 'loading') {
