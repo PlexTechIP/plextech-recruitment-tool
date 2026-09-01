@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, use } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
-import { Session, Candidate, Vote, VoteType, CandidateNote } from '@/lib/types'
+import { Session, Candidate, Vote, VoteType, CandidateNote, GraderReview } from '@/lib/types'
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
 
@@ -81,17 +81,25 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       const statsRes = await fetch(`/api/admin/grading-stats?round_id=${sessionData.round_id}`)
       if (statsRes.ok) {
         const stats = await statsRes.json()
+        type StatRow = {
+          applicant_id: string; total: number
+          r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number
+          reviews?: GraderReview[]
+        }
         const scoreMap = new Map<string, Record<string, number>>(
-          (stats.applicants ?? []).map((a: { applicant_id: string; total: number; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }) => [
+          (stats.applicants ?? []).map((a: StatRow) => [
             a.applicant_id,
             { score: a.total, r0: a.r0, r1: a.r1, r2: a.r2, r3: a.r3, r4: a.r4, r5: a.r5, r6: a.r6, r7: a.r7, r8: a.r8, r9: a.r9 },
           ])
+        )
+        const reviewMap = new Map<string, GraderReview[]>(
+          (stats.applicants ?? []).map((a: StatRow) => [a.applicant_id, a.reviews ?? []])
         )
         cands = cands.map(c => {
           if (!c.applicant_id) return c
           const scores = scoreMap.get(c.applicant_id)
           if (!scores) return c
-          return { ...c, data: { ...c.data, ...scores } }
+          return { ...c, data: { ...c.data, ...scores }, grader_reviews: reviewMap.get(c.applicant_id) ?? [] }
         })
       }
     }
@@ -550,12 +558,26 @@ function CandidateDetail({
   const [noteText, setNoteText] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const [essays, setEssays] = useState<{ prompt: { question_number: number; prompt: string }; response: string }[] | null>(null)
+  const [essaysLoading, setEssaysLoading] = useState(false)
+
   useEffect(() => {
     setNotes([])
     fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotes(data))
   }, [candidate.id])
+
+  // Lazily load the applicant's essay responses when this candidate is opened.
+  useEffect(() => {
+    setEssays(null)
+    if (!candidate.applicant_id) return
+    setEssaysLoading(true)
+    fetch(`/api/applicants/${candidate.applicant_id}/essays`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setEssays(data?.essays ?? []))
+      .finally(() => setEssaysLoading(false))
+  }, [candidate.id, candidate.applicant_id])
 
   async function deleteNote(noteId: string) {
     await fetch(`/api/candidate-notes?id=${noteId}`, { method: 'DELETE' })
@@ -590,6 +612,33 @@ function CandidateDetail({
 
       {/* Dynamic fields from data JSON */}
       <DataFields data={candidate.data} />
+
+      {/* Application essays */}
+      {candidate.applicant_id && (essaysLoading || (essays && essays.length > 0)) && (
+        <details className="mb-6 bg-[var(--bg-raised)]/60 border border-[var(--border)] rounded-lg">
+          <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium text-[var(--text-primary)]">
+            Application Essays
+            {essays && <span className="text-[var(--text-muted)] font-normal"> · {essays.length}</span>}
+          </summary>
+          <div className="px-4 pb-4 space-y-4">
+            {essaysLoading && <p className="text-xs text-[var(--text-muted)]">Loading…</p>}
+            {essays && essays.map((e, i) => (
+              <div key={i}>
+                <p className="text-xs font-semibold text-[#ff8a00] uppercase tracking-wider mb-1">
+                  Question {e.prompt.question_number}
+                </p>
+                <p className="text-xs text-[var(--text-muted)] mb-1.5">{e.prompt.prompt}</p>
+                <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">
+                  {e.response || <span className="italic text-[var(--text-muted)]">No response</span>}
+                </p>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Grader essay comments (rubric rounds) */}
+      <GraderComments reviews={candidate.grader_reviews} />
 
       {/* Vote actions */}
       {sessionActive && (
@@ -817,17 +866,70 @@ function RubricStats({ data }: { data: Record<string, unknown> }) {
   )
 }
 
+const COMMENT_SECTIONS: { key: 'comment1' | 'comment2' | 'comment3' | 'comment4' | 'comment0'; label: string }[] = [
+  { key: 'comment1', label: 'Essay Question 1' },
+  { key: 'comment2', label: 'Essay Question 2' },
+  { key: 'comment3', label: 'Essay Question 3' },
+  { key: 'comment4', label: 'Time Commitments' },
+  { key: 'comment0', label: 'Resume / CV' },
+]
+
+function GraderComments({ reviews }: { reviews?: GraderReview[] }) {
+  if (!reviews || reviews.length === 0) return null
+
+  // Only render sections that at least one grader actually wrote something for.
+  const sections = COMMENT_SECTIONS
+    .map(sec => ({
+      label: sec.label,
+      entries: reviews
+        .map(r => ({ grader: r.grader_email, text: (r[sec.key] ?? '').trim() }))
+        .filter(e => e.text.length > 0),
+    }))
+    .filter(sec => sec.entries.length > 0)
+
+  if (sections.length === 0) return null
+
+  const graderLabel = new Map<string, string>()
+  reviews.forEach((r, i) => graderLabel.set(r.grader_email, `Grader ${i + 1}`))
+
+  return (
+    <details className="mb-6 bg-[var(--bg-raised)]/60 border border-[var(--border)] rounded-lg" open>
+      <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium text-[var(--text-primary)]">
+        Grader Comments
+        <span className="text-[var(--text-muted)] font-normal"> · {reviews.length} reviewer{reviews.length !== 1 ? 's' : ''}</span>
+      </summary>
+      <div className="px-4 pb-4 space-y-4">
+        {sections.map(sec => (
+          <div key={sec.label}>
+            <p className="text-xs font-semibold text-[#ff8a00] uppercase tracking-wider mb-1.5">{sec.label}</p>
+            <div className="space-y-1.5">
+              {sec.entries.map((e, i) => (
+                <div key={i} className="text-sm text-[var(--text-secondary)]">
+                  <span className="text-[var(--text-muted)] text-xs mr-2">{graderLabel.get(e.grader)}</span>
+                  <span className="whitespace-pre-wrap">{e.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
 function DataFields({ data }: { data: Record<string, unknown> }) {
   const entries = Object.entries(data).filter(([k, v]) => v !== null && v !== undefined && v !== '' && !RUBRIC_KEYS.has(k))
 
   const urls = entries.filter(([, v]) => typeof v === 'string' && isUrl(v as string))
   const nonUrl = entries.filter(([, v]) => !(typeof v === 'string' && isUrl(v as string)))
 
-  // Split into compact (numbers / short strings) and long-text (multi-line interview responses)
-  const isLongText = (v: unknown) =>
-    typeof v === 'string' && (v.length > 80 || v.includes('\n'))
-  const compact = nonUrl.filter(([, v]) => !isLongText(v))
-  const longText = nonUrl.filter(([, v]) => isLongText(v))
+  // Numbers (scores) and short metadata strings render as compact cards; any
+  // longer free text (interview answers, notes) goes into collapsible blocks so
+  // it doesn't clutter the grid.
+  const isCompact = (v: unknown) =>
+    typeof v === 'number' || (typeof v === 'string' && v.length <= 24 && !v.includes('\n'))
+  const compact = nonUrl.filter(([, v]) => isCompact(v))
+  const longText = nonUrl.filter(([, v]) => !isCompact(v))
 
   return (
     <div className="mb-6 space-y-4">

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, EssayResponse, EssayPrompt, GraderAssignment } from '@/lib/models'
+import { Applicant, EssayResponse, EssayPrompt, GraderAssignment, Candidate, SessionMember } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -11,9 +11,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params
 
   // Graders may only access applicants assigned to them; leadership can access anyone
+  // Graders may access an applicant if assigned to grade them, OR if they are a
+  // member of a deliberation session that includes this applicant (so deliberators
+  // can read essays). Leadership+ can access anyone.
   if (auth.role === 'grader') {
     const assigned = await GraderAssignment.exists({ applicant_id: id, grader_email: auth.email })
-    if (!assigned) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!assigned) {
+      const sessionIds = await Candidate.find({ applicant_id: id }).distinct('session_id')
+      const isMember = sessionIds.length > 0 && await SessionMember.exists({ session_id: { $in: sessionIds }, user_email: auth.email })
+      if (!isMember) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
   }
 
   const [applicantDoc, responses] = await Promise.all([

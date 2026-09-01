@@ -78,13 +78,15 @@ export async function GET(req: NextRequest) {
 
   const scores = evaluateResults(reviewsTyped, applicants)
 
-  const reviewsByApplicant = new Map<string, { grader_email: string; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }[]>()
+  const reviewsByApplicant = new Map<string, { grader_email: string; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number; comment0: string | null; comment1: string | null; comment2: string | null; comment3: string | null; comment4: string | null }[]>()
   for (const r of reviewsTyped) {
     if (!reviewsByApplicant.has(r.applicant_id)) reviewsByApplicant.set(r.applicant_id, [])
     reviewsByApplicant.get(r.applicant_id)!.push({
       grader_email: r.grader_email,
       r0: r.r0 ?? 0, r1: r.r1 ?? 0, r2: r.r2 ?? 0, r3: r.r3 ?? 0, r4: r.r4 ?? 0,
       r5: r.r5 ?? 0, r6: r.r6 ?? 0, r7: r.r7 ?? 0, r8: r.r8 ?? 0, r9: r.r9 ?? 0,
+      comment0: r.comment0 ?? null, comment1: r.comment1 ?? null, comment2: r.comment2 ?? null,
+      comment3: r.comment3 ?? null, comment4: r.comment4 ?? null,
     })
   }
 

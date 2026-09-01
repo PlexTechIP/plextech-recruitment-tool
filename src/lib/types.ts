@@ -18,6 +18,15 @@ export interface Session {
   role: ApplicantRole | null
 }
 
+export interface GraderReview {
+  grader_email: string
+  comment0: string | null // Resume / CV
+  comment1: string | null // Essay Q1
+  comment2: string | null // Essay Q2
+  comment3: string | null // Essay Q3
+  comment4: string | null // Time Commitments
+}
+
 export interface Candidate {
   id: string
   session_id: string
@@ -26,6 +35,7 @@ export interface Candidate {
   data: CandidateData
   status: CandidateStatus
   created_at: string
+  grader_reviews?: GraderReview[] // merged from grading-stats for rubric-round sessions
 }
 
 export type CandidateData = Record<string, unknown>
