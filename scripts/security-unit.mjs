@@ -144,6 +144,26 @@ async function main() {
     await attachmentPdf.attach(Uint8Array.of(1, 2, 3), 'payload.bin')
     assert.equal((await validateResumePdf(await attachmentPdf.save())).ok, false)
 
+    // Common PDF exporters may leave an empty AcroForm dictionary even when
+    // the resume has no executable behavior. This metadata is safe to accept.
+    const benignFormPdf = await PDFDocument.create({ updateMetadata: false })
+    benignFormPdf.addPage()
+    benignFormPdf.catalog.set(
+      PDFName.of('AcroForm'),
+      benignFormPdf.context.obj({ Fields: [] }),
+    )
+    assert.deepEqual(await validateResumePdf(await benignFormPdf.save()), { ok: true })
+
+    // Active form features remain rejected even though AcroForm itself is
+    // allowed. XFA can contain executable or externally supplied behavior.
+    const activeFormPdf = await PDFDocument.create({ updateMetadata: false })
+    activeFormPdf.addPage()
+    activeFormPdf.catalog.set(
+      PDFName.of('AcroForm'),
+      activeFormPdf.context.obj({ Fields: [], XFA: PDFName.of('Payload') }),
+    )
+    assert.equal((await validateResumePdf(await activeFormPdf.save())).ok, false)
+
     assert.equal((await validateResumePdf(Uint8Array.of(1, 2, 3))).ok, false)
 
     console.log('Security unit checks passed.')
