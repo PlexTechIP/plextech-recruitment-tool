@@ -10,12 +10,13 @@ import {
 const MAX_PDF_OBJECTS_TO_INSPECT = 50_000
 const MAX_PDF_OBJECT_DEPTH = 30
 
-// Resume PDFs do not need executable actions, forms, multimedia, portfolios,
-// or attachments. Rejecting these structures reduces active-content risk when
-// a grader later previews an applicant-provided file.
+// Resume PDFs do not need executable actions, multimedia, portfolios, or
+// attachments. AcroForm itself is intentionally allowed because many benign
+// PDF exporters include an empty or non-executable form dictionary. Dangerous
+// form features remain blocked through XFA, SubmitForm, ImportData, JavaScript,
+// additional actions, and other active-content names below.
 const BLOCKED_PDF_NAMES = new Set([
   'AA',
-  'AcroForm',
   'Collection',
   'EF',
   'EmbeddedFile',
@@ -109,7 +110,7 @@ export async function validateResumePdf(bytes: Uint8Array): Promise<PdfValidatio
 
   const indirectObjects = document.context.enumerateIndirectObjects().map(([, object]) => object)
   if (containsBlockedPdfObject([document.catalog, ...indirectObjects])) {
-    return { ok: false, error: 'PDFs with forms, attachments, multimedia, or active content are not accepted.' }
+    return { ok: false, error: 'PDFs with scripts, embedded files, multimedia, or unsafe actions are not accepted.' }
   }
 
   return { ok: true }
