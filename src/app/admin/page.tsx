@@ -410,7 +410,7 @@ export default function AdminPage() {
     if (members.length + leadership.length === 0) { setAssignMessage('No graders found.'); setAssignLoading(false); return }
 
     const MEMBER_REDUNDANCY = 2
-    const LEADER_REDUNDANCY = 2
+    const LEADER_REDUNDANCY = 1
     const rows: { round_id: string; applicant_id: string; grader_email: string }[] = []
 
     let mp = 0, lp = 0
@@ -524,7 +524,7 @@ export default function AdminPage() {
     if (members.length + leadership.length === 0) { setStartGradingMessage('Round created, but no graders found.'); setStartGradingLoading(false); return }
 
     const MEMBER_REDUNDANCY = 2
-    const LEADER_REDUNDANCY = 2
+    const LEADER_REDUNDANCY = 1
     const rows: { round_id: string; applicant_id: string; grader_email: string }[] = []
     let mp = 0, lp = 0
     for (const appId of applicants) {
@@ -1281,7 +1281,7 @@ export default function AdminPage() {
                     <div className="pt-3 border-t border-[var(--border)] space-y-2">
                       <p className="text-sm font-medium text-[var(--text-primary)]">Grader Assignment</p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        Assigns all applicants to graders using round-robin (2 graders + 2 leadership per applicant). Run this once when the application deadline has passed.
+                        Assigns all applicants to graders using round-robin (2 graders + 1 leadership per applicant). Run this once when the application deadline has passed.
                       </p>
                       <div className="flex gap-2 items-center">
                         <button
