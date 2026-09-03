@@ -678,6 +678,11 @@ export default function ApplicationForm() {
             {submitting ? 'Submitting...' : 'Submit'}
           </button>
           {submitError && <p className="apply-warning">{submitError}</p>}
+          <p style={{ color: 'grey', fontSize: '0.9rem', marginTop: '1rem' }}>
+            For any concerns, please email{' '}
+            <a href="mailto:info@plextech.berkeley.edu">info@plextech.berkeley.edu</a>{' '}
+            at your earliest convenience.
+          </p>
         </div>
 
         <p style={{ color: 'grey', fontSize: '0.85rem' }}>Copyright © 2026 PlexTech All Rights Reserved.</p>
