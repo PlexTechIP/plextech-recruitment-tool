@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
 import { Applicant, EssayResponse, EssayPrompt } from '@/lib/models'
 import { requireRole } from '@/lib/serverAuth'
+import { isObjectId } from '@/lib/apiValidation'
 
 // Wrap a value as a safe CSV field (quotes doubled; commas/newlines contained).
 function csv(value: unknown): string {
@@ -15,6 +17,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   await connectDB()
   const { id } = await params
+  if (!isObjectId(id)) return NextResponse.json({ error: 'Invalid cycle id.' }, { status: 400 })
 
   // All applicants for this cycle (resume excluded — binary, not CSV-able).
   const applicants = await Applicant.find({ cycle_id: id }, { resume_base64: 0 }).sort({ created_at: 1 }).lean()
@@ -25,7 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const promptQById = new Map(prompts.map(p => [p._id.toString(), p.question_number]))
   const questionNumbers = prompts.map(p => p.question_number)
 
-  const responses = await EssayResponse.find({ applicant_id: { $in: applicantIds } }).lean()
+  const responses = await EssayResponse.find({ applicant_id: mongoose.trusted({ $in: applicantIds }) }).lean()
   const essayByApplicant = new Map<string, Map<number, string>>()
   for (const r of responses) {
     const q = promptQById.get(r.prompt_id.toString())
