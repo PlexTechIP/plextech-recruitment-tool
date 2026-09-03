@@ -10,29 +10,23 @@ import {
 const MAX_PDF_OBJECTS_TO_INSPECT = 50_000
 const MAX_PDF_OBJECT_DEPTH = 30
 
-// Resume PDFs do not need executable actions, multimedia, portfolios, or
-// attachments. AcroForm itself is intentionally allowed because many benign
-// PDF exporters include an empty or non-executable form dictionary. Dangerous
-// form features remain blocked through XFA, SubmitForm, ImportData, JavaScript,
-// additional actions, and other active-content names below.
+// Block executable or embedded payloads rather than harmless PDF structure.
+// Common exporters add AcroForm, OpenAction, additional-action, file-spec, and
+// external-navigation metadata to otherwise ordinary resumes. Those wrappers
+// are allowed; dangerous values nested inside them (JavaScript, Launch, XFA,
+// SubmitForm, embedded files, and multimedia) are still found by the recursive
+// scan and rejected below.
 const BLOCKED_PDF_NAMES = new Set([
-  'AA',
-  'Collection',
   'EF',
   'EmbeddedFile',
   'EmbeddedFiles',
-  'Filespec',
-  'GoToE',
-  'GoToR',
   'ImportData',
   'JavaScript',
   'JS',
   'Launch',
   'Movie',
-  'OpenAction',
   'Rendition',
   'RichMedia',
-  'Screen',
   'Sound',
   'SubmitForm',
   '3D',

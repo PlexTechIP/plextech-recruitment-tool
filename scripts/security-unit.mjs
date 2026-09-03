@@ -139,6 +139,19 @@ async function main() {
     activePdf.catalog.set(PDFName.of('OpenAction'), PDFName.of('JavaScript'))
     assert.equal((await validateResumePdf(await activePdf.save())).ok, false)
 
+    // Navigation and external-file metadata are common in exported resumes.
+    // They are safe when they do not contain an executable or embedded payload.
+    const externalLinkPdf = await PDFDocument.create({ updateMetadata: false })
+    externalLinkPdf.addPage()
+    externalLinkPdf.catalog.set(
+      PDFName.of('OpenAction'),
+      externalLinkPdf.context.obj({
+        S: PDFName.of('GoToR'),
+        F: { Type: PDFName.of('Filespec'), F: 'portfolio.pdf' },
+      }),
+    )
+    assert.deepEqual(await validateResumePdf(await externalLinkPdf.save()), { ok: true })
+
     const attachmentPdf = await PDFDocument.create({ updateMetadata: false })
     attachmentPdf.addPage()
     await attachmentPdf.attach(Uint8Array.of(1, 2, 3), 'payload.bin')
