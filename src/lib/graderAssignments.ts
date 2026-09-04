@@ -76,8 +76,8 @@ export function reviewerPoolForRole(role: string): ReviewerPool | null {
 }
 
 /**
- * Ranks pending assignments for transfer to a finished grader. The caller is
- * responsible for checking that the target has completed their current queue.
+ * Ranks pending assignments for transfer to an authorized grader while
+ * excluding applicants already assigned to or reviewed by that grader.
  */
 export function rankReassignmentCandidates({
   candidates,

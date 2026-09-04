@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         ...stats,
         average_rating: graderRatingSummaries.get(email)?.averageRating ?? null,
         rating_stddev: graderRatingSummaries.get(email)?.ratingStdDev ?? null,
-        transferable_count: stats.completed === stats.assigned ? transferableApplicants.size : 0,
+        transferable_count: transferableApplicants.size,
       }
     })
     .sort((a, b) => b.completed - a.completed)

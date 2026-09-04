@@ -359,12 +359,10 @@ export default function GradingConsolePage() {
                             <button
                               type="button"
                               onClick={() => openReassignment(g)}
-                              disabled={!done || g.transferable_count === 0}
-                              title={!done
-                                ? 'This grader must finish their current assignments first.'
-                                : g.transferable_count === 0
-                                  ? 'No eligible pending assignments can be transferred.'
-                                  : `${g.transferable_count} pending assignments are eligible for transfer.`}
+                              disabled={g.transferable_count === 0}
+                              title={g.transferable_count === 0
+                                ? 'No eligible pending assignments can be transferred.'
+                                : `${g.transferable_count} pending assignments are eligible for transfer.`}
                               className="whitespace-nowrap rounded-lg border border-[#FF6B35]/40 bg-[#FF6B35]/10 px-3 py-1.5 text-xs font-medium text-[#FF6B35] transition-colors hover:bg-[#FF6B35]/20 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               Assign more
