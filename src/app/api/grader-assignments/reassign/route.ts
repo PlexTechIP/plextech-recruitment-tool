@@ -90,8 +90,16 @@ export async function POST(req: NextRequest) {
   const targetEmail = typeof body.target_grader_email === 'string'
     ? body.target_grader_email.trim().toLowerCase()
     : ''
+  const sourceEmail = typeof body.source_grader_email === 'string'
+    ? body.source_grader_email.trim().toLowerCase()
+    : ''
 
-  if ((action !== 'preview' && action !== 'commit') || !isObjectId(roundId) || !isEmail(targetEmail)) {
+  if (
+    (action !== 'preview' && action !== 'commit')
+    || !isObjectId(roundId)
+    || !isEmail(targetEmail)
+    || (sourceEmail && !isEmail(sourceEmail))
+  ) {
     return NextResponse.json({ error: 'A valid action, round_id, and target_grader_email are required.' }, { status: 400 })
   }
 
@@ -100,14 +108,8 @@ export async function POST(req: NextRequest) {
   try {
     if (action === 'preview') {
       const count = body.count
-      const sourceEmail = typeof body.source_grader_email === 'string'
-        ? body.source_grader_email.trim().toLowerCase()
-        : ''
       if (!Number.isInteger(count) || Number(count) < 1 || Number(count) > MAX_TRANSFER_COUNT) {
         return NextResponse.json({ error: `Count must be an integer between 1 and ${MAX_TRANSFER_COUNT}.` }, { status: 400 })
-      }
-      if (sourceEmail && !isEmail(sourceEmail)) {
-        return NextResponse.json({ error: 'source_grader_email must be a valid email address.' }, { status: 400 })
       }
 
       const round = await requireActiveRubricRound(roundId)
@@ -188,14 +190,23 @@ export async function POST(req: NextRequest) {
         }]
       })
 
-      const rankedAll = rankReassignmentCandidates({
+      const rankedAutomatic = rankReassignmentCandidates({
         candidates,
         targetEmail,
         targetPool,
         targetApplicantIds,
       })
-      const eligibleSources = reassignmentSourceOptions(rankedAll)
-      const ranked = filterReassignmentCandidatesBySource(rankedAll, sourceEmail)
+      const rankedManual = rankReassignmentCandidates({
+        candidates,
+        targetEmail,
+        targetPool,
+        targetApplicantIds,
+        allowedSourcePools: targetPool === 'leadership' ? ['leadership', 'regular'] : ['regular'],
+      })
+      const eligibleSources = reassignmentSourceOptions(rankedManual)
+      const ranked = sourceEmail
+        ? filterReassignmentCandidatesBySource(rankedManual, sourceEmail)
+        : rankedAutomatic
       if (sourceEmail && ranked.length === 0) {
         throw new ReassignmentRejected(
           `${sourceEmail} has no eligible pending assignments that can be transferred to this grader.`,
@@ -222,7 +233,8 @@ export async function POST(req: NextRequest) {
         target_grader_email: targetEmail,
         count: transfers.length,
         available: ranked.length,
-        total_available: rankedAll.length,
+        total_available: rankedAutomatic.length,
+        target_pool: targetPool,
         selected_source_grader_email: sourceEmail || null,
         eligible_sources: eligibleSources,
         transfers,
@@ -267,8 +279,17 @@ export async function POST(req: NextRequest) {
       if (!target || !targetPool || users.length !== new Set([...sourceEmails, targetEmail]).size) {
         throw new ReassignmentRejected('One or more graders are no longer authorized.', 409)
       }
-      if (sourceEmails.some(email => email === targetEmail || poolByEmail.get(email) !== targetPool)) {
-        throw new ReassignmentRejected('The preview no longer preserves the regular and leadership reviewer pools.', 409)
+      const sourcePoolsAreAllowed = sourceEmails.every(email => {
+        const sourcePool = poolByEmail.get(email)
+        if (!sourcePool || email === targetEmail) return false
+        if (!sourceEmail) return sourcePool === targetPool
+        return email === sourceEmail && (
+          sourcePool === targetPool
+          || (targetPool === 'leadership' && sourcePool === 'regular')
+        )
+      })
+      if (!sourcePoolsAreAllowed || (sourceEmail && sourceEmails.length !== 1)) {
+        throw new ReassignmentRejected('The selected source grader is no longer eligible for this transfer.', 409)
       }
 
       const allAssignments = await GraderAssignment.find({ round_id: roundId })

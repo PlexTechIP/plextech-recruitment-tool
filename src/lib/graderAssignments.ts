@@ -19,6 +19,7 @@ export type ReassignmentCandidate = {
 export type ReassignmentSourceOption = {
   email: string
   available: number
+  pool: ReviewerPool
 }
 
 function uniqueEmails(emails: string[]) {
@@ -83,20 +84,23 @@ export function rankReassignmentCandidates({
   targetEmail,
   targetPool,
   targetApplicantIds,
+  allowedSourcePools = [targetPool],
 }: {
   candidates: ReassignmentCandidate[]
   targetEmail: string
   targetPool: ReviewerPool
   targetApplicantIds: string[]
+  allowedSourcePools?: ReviewerPool[]
 }): ReassignmentCandidate[] {
   const normalizedTarget = targetEmail.trim().toLowerCase()
   const alreadySeen = new Set(targetApplicantIds)
   const selectedApplicants = new Set<string>()
+  const allowedPools = new Set(allowedSourcePools)
 
   return candidates
     .filter(candidate => (
       candidate.sourceEmail.trim().toLowerCase() !== normalizedTarget
-      && candidate.sourcePool === targetPool
+      && allowedPools.has(candidate.sourcePool)
       && !alreadySeen.has(candidate.applicantId)
     ))
     .sort((a, b) => (
@@ -115,14 +119,18 @@ export function rankReassignmentCandidates({
 export function reassignmentSourceOptions(
   candidates: ReassignmentCandidate[],
 ): ReassignmentSourceOption[] {
-  const counts = new Map<string, number>()
+  const sources = new Map<string, ReassignmentSourceOption>()
   for (const candidate of candidates) {
     const email = candidate.sourceEmail.trim().toLowerCase()
-    counts.set(email, (counts.get(email) ?? 0) + 1)
+    const current = sources.get(email)
+    sources.set(email, {
+      email,
+      available: (current?.available ?? 0) + 1,
+      pool: candidate.sourcePool,
+    })
   }
 
-  return [...counts.entries()]
-    .map(([email, available]) => ({ email, available }))
+  return [...sources.values()]
     .sort((a, b) => b.available - a.available || a.email.localeCompare(b.email))
 }
 

@@ -107,8 +107,8 @@ try {
     'reassignment ranking should prioritize low review counts, then high source backlog, and preserve reviewer pools',
   )
   assert.deepEqual(reassignmentSourceOptions(ranked), [
-    { email: 'regular-b@berkeley.edu', available: 2 },
-    { email: 'regular-a@berkeley.edu', available: 1 },
+    { email: 'regular-b@berkeley.edu', available: 2, pool: 'regular' },
+    { email: 'regular-a@berkeley.edu', available: 1, pool: 'regular' },
   ])
   assert.deepEqual(
     filterReassignmentCandidatesBySource(ranked, ' REGULAR-B@berkeley.edu ').map(candidate => candidate.assignmentId),
@@ -116,6 +116,30 @@ try {
   )
   assert.equal(filterReassignmentCandidatesBySource(ranked, 'missing@berkeley.edu').length, 0)
   assert.equal(filterReassignmentCandidatesBySource(ranked).length, ranked.length)
+
+  const crossPoolRanked = rankReassignmentCandidates({
+    targetEmail: 'finished-leader@berkeley.edu',
+    targetPool: 'leadership',
+    targetApplicantIds: [],
+    allowedSourcePools: ['leadership', 'regular'],
+    candidates: [
+      {
+        assignmentId: 'regular', applicantId: 'regular-app', applicantName: 'Regular Source',
+        sourceEmail: 'regular@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 0, sourcePendingCount: 5,
+      },
+      {
+        assignmentId: 'leader', applicantId: 'leader-app', applicantName: 'Leadership Source',
+        sourceEmail: 'leader@berkeley.edu', sourcePool: 'leadership',
+        applicantCompletedReviews: 0, sourcePendingCount: 4,
+      },
+    ],
+  })
+  assert.deepEqual(
+    crossPoolRanked.map(candidate => candidate.assignmentId),
+    ['regular', 'leader'],
+    'leadership targets may explicitly include regular-source assignments',
+  )
   console.log('Grader assignment unit checks passed.')
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true })
