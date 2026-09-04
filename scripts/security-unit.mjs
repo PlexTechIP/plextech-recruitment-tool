@@ -137,7 +137,9 @@ async function main() {
     const activePdf = await PDFDocument.create({ updateMetadata: false })
     activePdf.addPage()
     activePdf.catalog.set(PDFName.of('OpenAction'), PDFName.of('JavaScript'))
-    assert.equal((await validateResumePdf(await activePdf.save())).ok, false)
+    const activePdfResult = await validateResumePdf(await activePdf.save())
+    assert.equal(activePdfResult.ok, false)
+    assert.match(activePdfResult.error, /embedded JavaScript.*\/JavaScript/)
 
     // Navigation and external-file metadata are common in exported resumes.
     // They are safe when they do not contain an executable or embedded payload.
@@ -155,7 +157,9 @@ async function main() {
     const attachmentPdf = await PDFDocument.create({ updateMetadata: false })
     attachmentPdf.addPage()
     await attachmentPdf.attach(Uint8Array.of(1, 2, 3), 'payload.bin')
-    assert.equal((await validateResumePdf(await attachmentPdf.save())).ok, false)
+    const attachmentPdfResult = await validateResumePdf(await attachmentPdf.save())
+    assert.equal(attachmentPdfResult.ok, false)
+    assert.match(attachmentPdfResult.error, /embedded file.*\/(?:EF|EmbeddedFile|EmbeddedFiles)/)
 
     // Common PDF exporters may leave an empty AcroForm dictionary even when
     // the resume has no executable behavior. This metadata is safe to accept.
@@ -175,9 +179,13 @@ async function main() {
       PDFName.of('AcroForm'),
       activeFormPdf.context.obj({ Fields: [], XFA: PDFName.of('Payload') }),
     )
-    assert.equal((await validateResumePdf(await activeFormPdf.save())).ok, false)
+    const activeFormPdfResult = await validateResumePdf(await activeFormPdf.save())
+    assert.equal(activeFormPdfResult.ok, false)
+    assert.match(activeFormPdfResult.error, /active XFA form content.*\/XFA/)
 
-    assert.equal((await validateResumePdf(Uint8Array.of(1, 2, 3))).ok, false)
+    const invalidPdfResult = await validateResumePdf(Uint8Array.of(1, 2, 3))
+    assert.equal(invalidPdfResult.ok, false)
+    assert.match(invalidPdfResult.error, /readable PDF header/)
 
     console.log('Security unit checks passed.')
   } finally {
