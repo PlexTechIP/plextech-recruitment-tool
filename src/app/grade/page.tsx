@@ -425,6 +425,9 @@ export default function GradePage() {
           <p className="text-xs text-[var(--text-muted)] mt-1">
             For each applicant, refer to the rubric for assigning ratings and leave concise comments for every response.
           </p>
+          <p className="text-xs font-medium text-[#ec6f34] mt-1">
+            Rating scale: 1 is the lowest rating and 4 is the highest rating.
+          </p>
         </div>
 
         <div className="space-y-5">
@@ -644,6 +647,100 @@ function CommentField({ label, value, onChange }: { label: string; value: string
 
 type RatingOption = number | { value: string; label: string }
 
+const DEFAULT_RATING_DESCRIPTIONS: Record<number, string> = {
+  1: 'Not demonstrated in the response',
+  2: 'Some evidence, but vague or underdeveloped',
+  3: 'Clearly demonstrated with specific evidence',
+  4: 'Exceptional depth, specificity, and insight',
+}
+
+function getRatingDescriptions(question: string): Record<number, string> {
+  const normalized = question.toLowerCase()
+
+  if (normalized.includes('informed understanding of plextech')) {
+    return {
+      1: 'No meaningful research; generic or copied website language',
+      2: 'Mentions PlexTech details, but understanding is surface-level',
+      3: 'Shows clear research using specific, accurate PlexTech details',
+      4: 'Shows deep research through projects, events, or member conversations',
+    }
+  }
+
+  if (normalized.includes('connect plextech to their goals')) {
+    return {
+      1: 'Does not connect PlexTech to personal goals or contributions',
+      2: 'Makes a broad connection with little personal detail',
+      3: 'Clearly connects PlexTech to specific goals and contributions',
+      4: 'Presents a compelling, highly personal two-way fit with PlexTech',
+    }
+  }
+
+  if (normalized.includes('contribution to their community')) {
+    return {
+      1: 'Provides no concrete contribution or meaningful action',
+      2: 'Describes limited or one-time involvement with little impact',
+      3: 'Shows meaningful, sustained contribution with specific examples',
+      4: 'Shows exceptional ownership and lasting, measurable community impact',
+    }
+  }
+
+  if (normalized.includes('why the community matters')) {
+    return {
+      1: 'Offers no reflection on the community or their role',
+      2: 'Gives a surface-level explanation with limited personal insight',
+      3: 'Thoughtfully explains the community, their role, and their growth',
+      4: 'Shows deep self-awareness and insight into their mutual impact',
+    }
+  }
+
+  if (normalized.includes('decal concept')) {
+    return {
+      1: 'Generic idea with little thought or development',
+      2: 'Reasonable idea, but details or originality are limited',
+      3: 'Original, coherent concept supported by thoughtful details',
+      4: 'Distinctive, exceptionally developed concept that would engage students',
+    }
+  }
+
+  if (normalized.includes('genuine interests, curiosity, and personality')) {
+    return {
+      1: 'Generic response that reveals little about the applicant',
+      2: 'Shows some interest, but the personal connection is limited',
+      3: 'Clearly reveals genuine curiosity and personality through specifics',
+      4: 'Feels memorable and authentic with a distinctive personal voice',
+    }
+  }
+
+  if (normalized.includes('thoughtful and expressive')) {
+    return {
+      1: 'Bullets are vague, unclear, or mostly list responsibilities',
+      2: 'Some useful explanation, but impact and context are inconsistent',
+      3: 'Clear, thoughtful bullets that explain actions and impact',
+      4: 'Exceptionally precise and compelling explanations throughout',
+    }
+  }
+
+  if (normalized.includes('technical depth')) {
+    return {
+      1: 'Shows little evidence of technical experience or understanding',
+      2: 'Shows basic technical exposure with limited depth',
+      3: 'Shows solid technical depth through specific work and decisions',
+      4: 'Shows exceptional depth, ownership, and technical sophistication',
+    }
+  }
+
+  if (normalized.includes('passion for learning and building')) {
+    return {
+      1: 'Shows little evidence of curiosity, learning, or building',
+      2: 'Shows some interest, but initiative or follow-through is limited',
+      3: 'Shows clear initiative and sustained passion through specific work',
+      4: 'Shows exceptional curiosity, self-direction, and drive to build',
+    }
+  }
+
+  return DEFAULT_RATING_DESCRIPTIONS
+}
+
 function RatingSelect({
   question, value, onChange, options,
 }: {
@@ -652,6 +749,41 @@ function RatingSelect({
   onChange: (v: string) => void
   options: RatingOption[]
 }) {
+  const isNumericScale = options.every(opt => typeof opt === 'number')
+
+  if (isNumericScale) {
+    const descriptions = getRatingDescriptions(question)
+
+    return (
+      <fieldset className="space-y-2">
+        <legend className="text-xs text-[var(--text-secondary)]">{question}</legend>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {options.map(opt => {
+            const rating = opt as number
+            const ratingValue = String(rating)
+            const selected = value === ratingValue
+
+            return (
+              <button
+                key={ratingValue}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => onChange(ratingValue)}
+                className={`min-h-24 rounded-lg border p-3 text-center transition-colors ${selected
+                  ? 'border-[#ff8a00] bg-[#ff8a00] text-white'
+                  : 'border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-secondary)] hover:border-[#ff8a00]'
+                }`}
+              >
+                <span className="block text-xl font-bold">{rating}</span>
+                <span className="mt-1 block text-xs leading-snug">{descriptions[rating]}</span>
+              </button>
+            )
+          })}
+        </div>
+      </fieldset>
+    )
+  }
+
   return (
     <div className="space-y-1">
       <label className="text-xs text-[var(--text-secondary)]">{question}</label>
