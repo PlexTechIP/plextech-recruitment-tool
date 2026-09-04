@@ -440,33 +440,6 @@ export default function AdminPage() {
   }
 
   // ── deadline ─────────────────────────────────────────────
-  const [exportingCsv, setExportingCsv] = useState(false)
-  async function exportApplications() {
-    if (!selectedCycle) return
-    setExportingCsv(true)
-    try {
-      const res = await fetch(`/api/cycles/${selectedCycle.id}/applicants/export`)
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        alert(`Export failed: ${err?.error ?? res.statusText}`)
-        return
-      }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `applications-${selectedCycle.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-    } catch {
-      alert('Export failed. Please try again.')
-    } finally {
-      setExportingCsv(false)
-    }
-  }
-
   async function saveDeadline() {
     if (!selectedCycle) return
     setDeadlineSaving(true)
@@ -1028,14 +1001,14 @@ export default function AdminPage() {
                   <p className="text-sm text-[var(--text-muted)]">{selectedCycle.status}</p>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    onClick={exportApplications}
-                    disabled={exportingCsv}
+                  <a
+                    href={`/api/cycles/${selectedCycle.id}/applicants/export`}
+                    download={`applications-${selectedCycle.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`}
                     title="Export applicant data to CSV"
-                    className="text-sm px-4 py-2 rounded-lg border font-medium bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[#FF6B35] hover:border-[#FF6B35]/50 transition-colors cursor-pointer disabled:opacity-50"
+                    className="text-sm px-4 py-2 rounded-lg border font-medium bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[#FF6B35] hover:border-[#FF6B35]/50 transition-colors cursor-pointer"
                   >
-                    {exportingCsv ? 'Exporting…' : 'Export applicant data to CSV'}
-                  </button>
+                    Export applicant data to CSV
+                  </a>
                   <button
                     onClick={() => toggleAccepting(selectedCycle)}
                     className={`text-sm px-4 py-2 rounded-lg border font-medium transition-colors cursor-pointer ${
