@@ -8,8 +8,6 @@ import { APPLICATIONS_LAUNCHED } from '@/lib/applicationStatus'
 
 interface Cycle { id: string; name: string; status: string; accepting_applications: boolean; application_deadline: string | null }
 
-const APPLICATIONS_OPEN_AT = new Date('2026-08-26T00:00:00-07:00').getTime()
-
 export default function ApplyHome() {
   const router = useRouter()
   const { data: authSession } = useSession()
@@ -35,20 +33,21 @@ export default function ApplyHome() {
   }, [])
 
   useEffect(() => {
-    const updateCountdown = () => setNow(Date.now())
-    updateCountdown()
-    const interval = window.setInterval(updateCountdown, 1000)
+    const updateTime = () => setNow(Date.now())
+    updateTime()
+    const interval = window.setInterval(updateTime, 1000)
 
     return () => window.clearInterval(interval)
   }, [])
 
-  const accepting = APPLICATIONS_LAUNCHED && (cycle?.accepting_applications ?? false)
-  const remainingMilliseconds = Math.max(0, APPLICATIONS_OPEN_AT - (now ?? APPLICATIONS_OPEN_AT))
-  const remainingSeconds = Math.floor(remainingMilliseconds / 1000)
-  const days = Math.floor(remainingSeconds / 86_400)
-  const hours = Math.floor((remainingSeconds % 86_400) / 3_600)
-  const minutes = Math.floor((remainingSeconds % 3_600) / 60)
-  const seconds = remainingSeconds % 60
+  const deadline = cycle?.application_deadline
+    ? new Date(cycle.application_deadline).getTime()
+    : null
+  const accepting = APPLICATIONS_LAUNCHED
+    && (cycle?.accepting_applications ?? false)
+    && deadline !== null
+    && now !== null
+    && now < deadline
 
   function startApplication() {
     if (window.self !== window.top) {
@@ -80,18 +79,9 @@ export default function ApplyHome() {
           </>
         ) : (
           <div style={{ color: '#ec6f34' }}>
-            <h4 style={{ marginBottom: '0.5rem' }}>Time until applications open</h4>
-            <p
-              aria-live="polite"
-              aria-label={`${days} days, ${hours} hours, ${minutes} minutes, and ${seconds} seconds until applications open`}
-              style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0 }}
-            >
-              {now === null
-                ? '--d --h --m --s'
-                : `${days}d ${hours}h ${minutes}m ${seconds}s`}
-            </p>
+            <h4>Applications are now closed.</h4>
             <p style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
-              Applications open August 26 at 12:00 AM Pacific Time.
+              Please apply again in Spring 2027!
             </p>
           </div>
         )}
