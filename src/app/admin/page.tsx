@@ -790,10 +790,27 @@ export default function AdminPage() {
   async function loadAnalytics(cycleId: string) {
     const data: Applicant[] = await fetch(`/api/cycles/${cycleId}/applicants`).then(r => r.json())
     if (!data) return
-    const counts: Record<string, number> = { total: data.length, freshman: 0, sophomore: 0, junior: 0, senior: 0, male: 0, female: 0, other: 0 }
+    const counts: Record<string, number> = {
+      total: data.length,
+      developer: 0,
+      curriculum: 0,
+      freshman: 0,
+      sophomore: 0,
+      junior: 0,
+      senior: 0,
+      male: 0,
+      female: 0,
+      other: 0,
+    }
     // Legacy applicants stored a graduation year instead of a class-year label
     const legacyYearMap: Record<string, string> = { [String(new Date().getFullYear())]: 'senior', [String(new Date().getFullYear()+1)]: 'junior', [String(new Date().getFullYear()+2)]: 'sophomore', [String(new Date().getFullYear()+3)]: 'freshman' }
     for (const app of data) {
+      // Keep this aligned with scoring and deliberation: only the exact
+      // Industry Developer value is treated as developer; legacy values use
+      // the curriculum path.
+      if (app.desired_roles === 'Industry Developer') counts.developer++
+      else counts.curriculum++
+
       const raw = app.year ?? ''
       const yr = ['Freshman', 'Sophomore', 'Junior', 'Senior'].includes(raw)
         ? raw.toLowerCase()
@@ -1109,6 +1126,8 @@ export default function AdminPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
                     { label: 'Total', value: analytics.total },
+                    { label: 'Industry Developers', value: `${analytics.developer} (${pct(analytics.developer)})` },
+                    { label: 'Curriculum', value: `${analytics.curriculum} (${pct(analytics.curriculum)})` },
                     { label: 'Freshman', value: `${analytics.freshman} (${pct(analytics.freshman)})` },
                     { label: 'Sophomore', value: `${analytics.sophomore} (${pct(analytics.sophomore)})` },
                     { label: 'Junior', value: `${analytics.junior} (${pct(analytics.junior)})` },
