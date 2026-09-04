@@ -7,6 +7,7 @@ import { Review as ReviewType, Applicant as ApplicantType } from '@/lib/types'
 import { requireRole } from '@/lib/serverAuth'
 import { isObjectId } from '@/lib/apiValidation'
 import { reviewerPoolForRole } from '@/lib/graderAssignments'
+import { summarizeGraderRatings } from '@/lib/graderStats'
 
 export async function GET(req: NextRequest) {
   const auth = await requireRole('leadership')
@@ -54,6 +55,7 @@ export async function GET(req: NextRequest) {
   const pendingAssignments = assignments.filter(assignment => (
     !reviewedSet.has(`${assignment.grader_email}::${assignment.applicant_id}`)
   ))
+  const graderRatingSummaries = summarizeGraderRatings(reviews)
   const graders = [...graderMap.entries()]
     .map(([email, stats]) => {
       const targetPool = poolByEmail.get(email)
@@ -73,6 +75,8 @@ export async function GET(req: NextRequest) {
       return {
         email,
         ...stats,
+        average_rating: graderRatingSummaries.get(email)?.averageRating ?? null,
+        rating_stddev: graderRatingSummaries.get(email)?.ratingStdDev ?? null,
         transferable_count: stats.completed === stats.assigned ? transferableApplicants.size : 0,
       }
     })

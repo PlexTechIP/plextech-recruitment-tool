@@ -9,6 +9,8 @@ interface GraderStat {
   email: string
   assigned: number
   completed: number
+  average_rating: number | null
+  rating_stddev: number | null
   transferable_count: number
 }
 
@@ -273,6 +275,9 @@ export default function GradingConsolePage() {
               <div className="px-5 py-4 border-b border-[var(--border)]">
                 <h2 className="font-semibold text-[var(--text-primary)]">Grader Progress</h2>
                 <p className="text-xs text-[var(--text-muted)] mt-0.5">{graders.length} graders assigned</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  Lower average ratings generally indicate stricter grading; higher standard deviation indicates more variable ratings. Based on submitted 1–4 rubric ratings.
+                </p>
               </div>
               {graders.length === 0 ? (
                 <p className="px-5 py-4 text-sm text-[var(--text-muted)]">No graders assigned yet.</p>
@@ -283,6 +288,18 @@ export default function GradingConsolePage() {
                       <th className="text-left px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Grader</th>
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Completed</th>
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Assigned</th>
+                      <th
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium"
+                        title="Average across all submitted 1–4 rubric ratings (R1–R9). Lower generally means stricter grading."
+                      >
+                        Avg rating
+                      </th>
+                      <th
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium"
+                        title="Population standard deviation across all submitted 1–4 rubric ratings (R1–R9). Higher means more variable scoring."
+                      >
+                        Std dev
+                      </th>
                       <th className="px-5 py-2 text-xs text-[var(--text-muted)] font-medium w-40">Progress</th>
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Action</th>
                     </tr>
@@ -296,6 +313,12 @@ export default function GradingConsolePage() {
                           <td className="px-5 py-3 text-[var(--text-secondary)]">{g.email}</td>
                           <td className="px-5 py-3 text-right font-medium text-[var(--text-primary)]">{g.completed}</td>
                           <td className="px-5 py-3 text-right text-[var(--text-muted)]">{g.assigned}</td>
+                          <td className="px-5 py-3 text-right font-mono text-[var(--text-primary)]">
+                            {g.average_rating === null ? '—' : g.average_rating.toFixed(2)}
+                          </td>
+                          <td className="px-5 py-3 text-right font-mono text-[var(--text-muted)]">
+                            {g.rating_stddev === null ? '—' : g.rating_stddev.toFixed(2)}
+                          </td>
                           <td className="px-5 py-3">
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
