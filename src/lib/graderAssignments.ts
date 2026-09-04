@@ -16,6 +16,11 @@ export type ReassignmentCandidate = {
   sourcePendingCount: number
 }
 
+export type ReassignmentSourceOption = {
+  email: string
+  available: number
+}
+
 function uniqueEmails(emails: string[]) {
   return [...new Set(emails.map(email => email.trim().toLowerCase()))]
 }
@@ -105,4 +110,27 @@ export function rankReassignmentCandidates({
       selectedApplicants.add(candidate.applicantId)
       return true
     })
+}
+
+export function reassignmentSourceOptions(
+  candidates: ReassignmentCandidate[],
+): ReassignmentSourceOption[] {
+  const counts = new Map<string, number>()
+  for (const candidate of candidates) {
+    const email = candidate.sourceEmail.trim().toLowerCase()
+    counts.set(email, (counts.get(email) ?? 0) + 1)
+  }
+
+  return [...counts.entries()]
+    .map(([email, available]) => ({ email, available }))
+    .sort((a, b) => b.available - a.available || a.email.localeCompare(b.email))
+}
+
+export function filterReassignmentCandidatesBySource(
+  candidates: ReassignmentCandidate[],
+  sourceEmail?: string | null,
+): ReassignmentCandidate[] {
+  const normalizedSource = sourceEmail?.trim().toLowerCase()
+  if (!normalizedSource) return candidates
+  return candidates.filter(candidate => candidate.sourceEmail.trim().toLowerCase() === normalizedSource)
 }
