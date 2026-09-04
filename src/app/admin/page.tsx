@@ -429,12 +429,20 @@ export default function AdminPage() {
       }
     }
 
-    await fetch('/api/grader-assignments', {
+    const assignmentRes = await fetch('/api/grader-assignments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rows),
     })
-    await updateRoundStatus(selectedRound, 'grading')
+    if (!assignmentRes.ok) {
+      const error = await assignmentRes.json().catch(() => ({}))
+      setAssignMessage(`Assignment failed: ${error?.error ?? assignmentRes.statusText}`)
+      setAssignLoading(false)
+      return
+    }
+    const updatedRound = { ...selectedRound, status: 'grading' as RoundStatus }
+    setRounds(previous => previous.map(round => round.id === selectedRound.id ? updatedRound : round))
+    setSelectedRound(updatedRound)
     setAssignMessage(`Assigned ${applicants.length} applicants across ${members.length + leadership.length} graders.`)
     setAssignLoading(false)
   }
@@ -534,17 +542,19 @@ export default function AdminPage() {
       for (const email of assigned) rows.push({ round_id: newRound.id, applicant_id: appId, grader_email: email })
     }
 
-    await fetch('/api/grader-assignments', {
+    const assignmentRes = await fetch('/api/grader-assignments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(rows),
     })
-    await fetch(`/api/rounds/${newRound.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'grading' }),
-    })
+    if (!assignmentRes.ok) {
+      const error = await assignmentRes.json().catch(() => ({}))
+      setStartGradingMessage(`Round created, but assignment failed: ${error?.error ?? assignmentRes.statusText}`)
+      setStartGradingLoading(false)
+      return
+    }
     await loadRounds(selectedCycle.id)
+    selectRound({ ...newRound, status: 'grading' })
     setStartGradingMessage(`Grading started — ${applicants.length} applicants assigned across ${members.length + leadership.length} graders.`)
     setStartGradingLoading(false)
   }
@@ -1100,7 +1110,11 @@ export default function AdminPage() {
                           >
                             {startGradingLoading ? 'Starting...' : '▶ Start Grading'}
                           </button>
-                          {startGradingMessage && <p className="text-sm text-green-400">{startGradingMessage}</p>}
+                          {startGradingMessage && (
+                            <p className={`text-sm ${startGradingMessage.includes('failed') ? 'text-red-400' : 'text-green-400'}`}>
+                              {startGradingMessage}
+                            </p>
+                          )}
                         </div>
                       )}
                       {passed && rounds.some(r => r.grading_type === 'rubric') && (
@@ -1317,7 +1331,11 @@ export default function AdminPage() {
                           View Grading Console →
                         </button>
                       </div>
-                      {assignMessage && <p className="text-sm text-green-400">{assignMessage}</p>}
+                      {assignMessage && (
+                        <p className={`text-sm ${assignMessage.includes('failed') ? 'text-red-400' : 'text-green-400'}`}>
+                          {assignMessage}
+                        </p>
+                      )}
                     </div>
 
                     {/* Grading progress */}
