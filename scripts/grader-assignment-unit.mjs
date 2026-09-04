@@ -17,7 +17,11 @@ const compiledPath = join(temporaryDirectory, 'module.mjs')
 
 try {
   await writeFile(compiledPath, compiled, { encoding: 'utf8', mode: 0o600 })
-  const { buildGraderAssignments } = await import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
+  const {
+    buildGraderAssignments,
+    rankReassignmentCandidates,
+    reviewerPoolForRole,
+  } = await import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
 
   const applicantIds = Array.from({ length: 282 }, (_, index) => `applicant-${index}`)
   const memberEmails = Array.from({ length: 26 }, (_, index) => `grader-${index}@berkeley.edu`)
@@ -52,6 +56,54 @@ try {
   assert.deepEqual([...new Set(leadershipLoads)].sort(), [16, 17])
 
   assert.throws(() => buildGraderAssignments({ ...input, leadershipEmails: [] }))
+
+  assert.equal(reviewerPoolForRole('grader'), 'regular')
+  assert.equal(reviewerPoolForRole('leadership'), 'leadership')
+  assert.equal(reviewerPoolForRole('admin'), 'leadership')
+  assert.equal(reviewerPoolForRole('alumni'), null)
+
+  const ranked = rankReassignmentCandidates({
+    targetEmail: 'finished@berkeley.edu',
+    targetPool: 'regular',
+    targetApplicantIds: ['already-seen'],
+    candidates: [
+      {
+        assignmentId: 'a4', applicantId: 'app-4', applicantName: 'Four',
+        sourceEmail: 'regular-b@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 1, sourcePendingCount: 9,
+      },
+      {
+        assignmentId: 'a2', applicantId: 'app-2', applicantName: 'Two',
+        sourceEmail: 'regular-a@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 0, sourcePendingCount: 4,
+      },
+      {
+        assignmentId: 'a1', applicantId: 'app-1', applicantName: 'One',
+        sourceEmail: 'regular-b@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 0, sourcePendingCount: 9,
+      },
+      {
+        assignmentId: 'a1-duplicate', applicantId: 'app-1', applicantName: 'One',
+        sourceEmail: 'regular-c@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 0, sourcePendingCount: 2,
+      },
+      {
+        assignmentId: 'seen', applicantId: 'already-seen', applicantName: 'Seen',
+        sourceEmail: 'regular-b@berkeley.edu', sourcePool: 'regular',
+        applicantCompletedReviews: 0, sourcePendingCount: 10,
+      },
+      {
+        assignmentId: 'leader', applicantId: 'leadership-app', applicantName: 'Leader',
+        sourceEmail: 'leader@berkeley.edu', sourcePool: 'leadership',
+        applicantCompletedReviews: 0, sourcePendingCount: 20,
+      },
+    ],
+  })
+  assert.deepEqual(
+    ranked.map(candidate => candidate.assignmentId),
+    ['a1', 'a2', 'a4'],
+    'reassignment ranking should prioritize low review counts, then high source backlog, and preserve reviewer pools',
+  )
   console.log('Grader assignment unit checks passed.')
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true })

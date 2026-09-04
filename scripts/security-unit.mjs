@@ -59,6 +59,10 @@ async function main() {
   } = validation
   const { validateResumePdf } = pdfModule.module
   const { isBerkeleyEmail, normalizeBerkeleyEmail } = emailModule.module
+  const reassignmentRouteSource = await readFile(
+    join(process.cwd(), 'src/app/api/grader-assignments/reassign/route.ts'),
+    'utf8',
+  )
 
   try {
     const valid = await readJsonObject(jsonRequest({ name: 'PlexTech', nested: { ok: true } }))
@@ -124,6 +128,12 @@ async function main() {
     assert.equal(normalizeHttpUrl('javascript:alert(1)'), null)
     assert.equal(normalizeHttpUrl('https://user:pass@example.com'), null)
     assert.equal(normalizeHttpUrl('https://example.com/path'), 'https://example.com/path')
+
+    assert.match(
+      reassignmentRouteSource,
+      /requireRole\('admin'\)/,
+      'grader reassignment must remain admin-only',
+    )
 
     const validPdf = await PDFDocument.create({ updateMetadata: false })
     validPdf.addPage()

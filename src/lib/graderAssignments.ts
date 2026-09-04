@@ -4,6 +4,18 @@ export type GraderAssignmentRow = {
   grader_email: string
 }
 
+export type ReviewerPool = 'regular' | 'leadership'
+
+export type ReassignmentCandidate = {
+  assignmentId: string
+  applicantId: string
+  applicantName: string
+  sourceEmail: string
+  sourcePool: ReviewerPool
+  applicantCompletedReviews: number
+  sourcePendingCount: number
+}
+
 function uniqueEmails(emails: string[]) {
   return [...new Set(emails.map(email => email.trim().toLowerCase()))]
 }
@@ -49,4 +61,48 @@ export function buildGraderAssignments({
   }
 
   return rows
+}
+
+export function reviewerPoolForRole(role: string): ReviewerPool | null {
+  if (role === 'grader') return 'regular'
+  if (role === 'leadership' || role === 'admin') return 'leadership'
+  return null
+}
+
+/**
+ * Ranks pending assignments for transfer to a finished grader. The caller is
+ * responsible for checking that the target has completed their current queue.
+ */
+export function rankReassignmentCandidates({
+  candidates,
+  targetEmail,
+  targetPool,
+  targetApplicantIds,
+}: {
+  candidates: ReassignmentCandidate[]
+  targetEmail: string
+  targetPool: ReviewerPool
+  targetApplicantIds: string[]
+}): ReassignmentCandidate[] {
+  const normalizedTarget = targetEmail.trim().toLowerCase()
+  const alreadySeen = new Set(targetApplicantIds)
+  const selectedApplicants = new Set<string>()
+
+  return candidates
+    .filter(candidate => (
+      candidate.sourceEmail.trim().toLowerCase() !== normalizedTarget
+      && candidate.sourcePool === targetPool
+      && !alreadySeen.has(candidate.applicantId)
+    ))
+    .sort((a, b) => (
+      a.applicantCompletedReviews - b.applicantCompletedReviews
+      || b.sourcePendingCount - a.sourcePendingCount
+      || a.applicantId.localeCompare(b.applicantId)
+      || a.assignmentId.localeCompare(b.assignmentId)
+    ))
+    .filter(candidate => {
+      if (selectedApplicants.has(candidate.applicantId)) return false
+      selectedApplicants.add(candidate.applicantId)
+      return true
+    })
 }
