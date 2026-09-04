@@ -23,13 +23,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     if (!activeRound) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  // The global sanitizeProjection setting intentionally prevents callers from
-  // overriding select:false fields. This server-authored query is the single
-  // audited exception that may retrieve the private resume payload.
-  const applicant = await Applicant.findById(id)
-    .sanitizeProjection(false)
-    .select('+resume_base64')
-    .lean()
+  // Global projection sanitization intentionally prevents Mongoose queries
+  // from overriding select:false fields. Use the native collection for this
+  // authenticated, server-authored query with a fixed projection so the
+  // private resume payload is the only applicant field retrieved.
+  const applicant = await Applicant.collection.findOne<{ resume_base64?: string | null }>(
+    { _id: new mongoose.Types.ObjectId(id) },
+    { projection: { resume_base64: 1 } },
+  )
   if (!applicant) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   return NextResponse.json(
     { resume_base64: applicant.resume_base64 ?? null },
