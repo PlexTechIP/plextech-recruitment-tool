@@ -91,10 +91,10 @@ export async function POST(req: NextRequest) {
       // closure/deletion and authorized-user mutation/deletion.
       const rounds = await Round.find({
         _id: mongoose.trusted({ $in: roundIds }),
-        status: 'grading',
+        status: mongoose.trusted({ $in: ['pending', 'grading'] }),
       }).select('_id cycle_id').session(dbSession).lean()
       if (rounds.length !== roundIds.length) {
-        throw new AssignmentRejected('Assignments can only be added to active grading rounds.', 409)
+        throw new AssignmentRejected('Assignments can only be added to pending or active grading rounds.', 409)
       }
 
       const applicants = await Applicant.find({
@@ -114,12 +114,18 @@ export async function POST(req: NextRequest) {
       }
 
       const roundGuard = await Round.updateMany(
-        { _id: mongoose.trusted({ $in: roundIds }), status: 'grading' },
-        { $inc: { lifecycle_write_count: 1 } },
+        {
+          _id: mongoose.trusted({ $in: roundIds }),
+          status: mongoose.trusted({ $in: ['pending', 'grading'] }),
+        },
+        {
+          $set: { status: 'grading' },
+          $inc: { lifecycle_write_count: 1 },
+        },
         { session: dbSession },
       )
       if (roundGuard.modifiedCount !== roundIds.length) {
-        throw new AssignmentRejected('Assignments can only be added to active grading rounds.', 409)
+        throw new AssignmentRejected('Assignments can only be added to pending or active grading rounds.', 409)
       }
 
       const graderGuard = await AuthorizedUser.updateMany(
