@@ -22,6 +22,7 @@ interface ReassignmentSource {
 interface ReassignmentSourceOption {
   email: string
   available: number
+  pool: 'regular' | 'leadership'
 }
 
 interface ReassignmentPreview {
@@ -29,6 +30,7 @@ interface ReassignmentPreview {
   count: number
   available: number
   total_available: number
+  target_pool: 'regular' | 'leadership'
   selected_source_grader_email: string | null
   eligible_sources: ReassignmentSourceOption[]
   transfers: {
@@ -187,6 +189,7 @@ export default function GradingConsolePage() {
           round_id: selectedRoundId,
           target_grader_email: reassignTarget.email,
           assignment_ids: reassignPreview.transfers.map(transfer => transfer.assignment_id),
+          source_grader_email: reassignPreview.selected_source_grader_email ?? undefined,
         }),
       })
       const data = await response.json().catch(() => ({}))
@@ -502,7 +505,7 @@ export default function GradingConsolePage() {
                   Assign more to {reassignTarget.email}
                 </h2>
                 <p className="mt-1 text-sm text-[var(--text-muted)]">
-                  Pending work will be moved from graders in the same reviewer pool. Every applicant keeps exactly two reviewers.
+                  Automatic suggestions stay in the same reviewer pool. Leadership/admin graders can also manually take pending work from regular graders. Every applicant keeps exactly two reviewers.
                 </p>
               </div>
               <button
@@ -587,7 +590,7 @@ export default function GradingConsolePage() {
                         <option value="">Automatic (recommended)</option>
                         {reassignPreview.eligible_sources.map(source => (
                           <option key={source.email} value={source.email}>
-                            {source.email} ({source.available} available)
+                            {source.email} ({source.pool === 'regular' ? 'regular' : 'leadership'}, {source.available} available)
                           </option>
                         ))}
                       </select>
@@ -628,6 +631,14 @@ export default function GradingConsolePage() {
                   {!reassignmentPreviewIsCurrent && (
                     <p className="mt-2 text-xs font-medium text-amber-600">Update the preview before confirming your changes.</p>
                   )}
+                  {reassignSourceEmail
+                    && reassignPreview.target_pool === 'leadership'
+                    && reassignPreview.eligible_sources.find(source => source.email === reassignSourceEmail)?.pool === 'regular'
+                    && (
+                      <p className="mt-2 text-xs font-medium text-amber-600">
+                        Manual override: these applications will have two leadership/admin reviewers instead of one regular and one leadership reviewer.
+                      </p>
+                    )}
                 </div>
 
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
