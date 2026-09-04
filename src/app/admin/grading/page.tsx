@@ -19,10 +19,18 @@ interface ReassignmentSource {
   applicants: { id: string; name: string }[]
 }
 
+interface ReassignmentSourceOption {
+  email: string
+  available: number
+}
+
 interface ReassignmentPreview {
   target_grader_email: string
   count: number
   available: number
+  total_available: number
+  selected_source_grader_email: string | null
+  eligible_sources: ReassignmentSourceOption[]
   transfers: {
     assignment_id: string
     applicant_id: string
@@ -64,6 +72,7 @@ export default function GradingConsolePage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [reassignTarget, setReassignTarget] = useState<GraderStat | null>(null)
   const [reassignCount, setReassignCount] = useState(5)
+  const [reassignSourceEmail, setReassignSourceEmail] = useState('')
   const [reassignPreview, setReassignPreview] = useState<ReassignmentPreview | null>(null)
   const [reassignLoading, setReassignLoading] = useState(false)
   const [reassignError, setReassignError] = useState('')
@@ -123,6 +132,7 @@ export default function GradingConsolePage() {
   function openReassignment(grader: GraderStat) {
     setReassignTarget(grader)
     setReassignCount(Math.min(5, grader.transferable_count))
+    setReassignSourceEmail('')
     setReassignPreview(null)
     setReassignError('')
   }
@@ -130,6 +140,7 @@ export default function GradingConsolePage() {
   function closeReassignment() {
     if (reassignLoading) return
     setReassignTarget(null)
+    setReassignSourceEmail('')
     setReassignPreview(null)
     setReassignError('')
   }
@@ -138,7 +149,6 @@ export default function GradingConsolePage() {
     if (!reassignTarget || !selectedRoundId) return
     setReassignLoading(true)
     setReassignError('')
-    setReassignPreview(null)
     try {
       const response = await fetch('/api/grader-assignments/reassign', {
         method: 'POST',
@@ -148,6 +158,7 @@ export default function GradingConsolePage() {
           round_id: selectedRoundId,
           target_grader_email: reassignTarget.email,
           count: reassignCount,
+          source_grader_email: reassignSourceEmail || undefined,
         }),
       })
       const data = await response.json().catch(() => ({}))
@@ -205,6 +216,17 @@ export default function GradingConsolePage() {
     else if (sortKey === 'reviews') diff = a.review_count - b.review_count
     return sortDir === 'asc' ? diff : -diff
   })
+
+  const selectedSourceAvailable = reassignPreview
+    ? reassignSourceEmail
+      ? reassignPreview.eligible_sources.find(source => source.email === reassignSourceEmail)?.available ?? 0
+      : reassignPreview.total_available
+    : reassignTarget?.transferable_count ?? 0
+  const reassignmentPreviewIsCurrent = Boolean(
+    reassignPreview
+    && reassignPreview.count === reassignCount
+    && (reassignPreview.selected_source_grader_email ?? '') === reassignSourceEmail,
+  )
 
   if (!authed) return null
 
@@ -541,6 +563,73 @@ export default function GradingConsolePage() {
               </div>
             ) : (
               <div className="mt-5 space-y-4">
+                <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] p-4">
+                  <h3 className="text-sm font-medium text-[var(--text-primary)]">Adjust this proposal</h3>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Keep automatic selection, or take pending applications from one specific grader instead.
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-end gap-3">
+                    <label className="min-w-64 flex-1 text-sm text-[var(--text-secondary)]">
+                      Take applications from
+                      <select
+                        value={reassignSourceEmail}
+                        onChange={event => {
+                          const nextSource = event.target.value
+                          const available = nextSource
+                            ? reassignPreview.eligible_sources.find(source => source.email === nextSource)?.available ?? 0
+                            : reassignPreview.total_available
+                          setReassignSourceEmail(nextSource)
+                          setReassignCount(current => Math.min(current, 20, available))
+                          setReassignError('')
+                        }}
+                        className="mt-1 block w-full rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-[var(--text-primary)] focus:border-[#FF6B35] focus:outline-none"
+                      >
+                        <option value="">Automatic (recommended)</option>
+                        {reassignPreview.eligible_sources.map(source => (
+                          <option key={source.email} value={source.email}>
+                            {source.email} ({source.available} available)
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm text-[var(--text-secondary)]">
+                      Number to transfer
+                      <input
+                        type="number"
+                        min={1}
+                        max={Math.min(20, selectedSourceAvailable)}
+                        value={reassignCount}
+                        onChange={event => {
+                          setReassignCount(Number(event.target.value))
+                          setReassignError('')
+                        }}
+                        className="mt-1 block w-28 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-2 text-[var(--text-primary)] focus:border-[#FF6B35] focus:outline-none"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={previewReassignment}
+                      disabled={
+                        reassignLoading
+                        || !Number.isInteger(reassignCount)
+                        || reassignCount < 1
+                        || reassignCount > 20
+                        || reassignCount > selectedSourceAvailable
+                        || reassignmentPreviewIsCurrent
+                      }
+                      className="rounded-lg border border-[#FF6B35] px-4 py-2 text-sm font-medium text-[#FF6B35] hover:bg-[#FF6B35]/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {reassignLoading ? 'Updating…' : 'Update preview'}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--text-muted)]">
+                    {selectedSourceAvailable} eligible pending assignment{selectedSourceAvailable === 1 ? '' : 's'} available for this selection.
+                  </p>
+                  {!reassignmentPreviewIsCurrent && (
+                    <p className="mt-2 text-xs font-medium text-amber-600">Update the preview before confirming your changes.</p>
+                  )}
+                </div>
+
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
                   <p className="font-medium text-[var(--text-primary)]">
                     Transfer {reassignPreview.count} application{reassignPreview.count === 1 ? '' : 's'} to {reassignPreview.target_grader_email}
@@ -572,6 +661,7 @@ export default function GradingConsolePage() {
                     type="button"
                     onClick={() => {
                       setReassignPreview(null)
+                      setReassignSourceEmail('')
                       setReassignError('')
                     }}
                     disabled={reassignLoading}
@@ -582,7 +672,7 @@ export default function GradingConsolePage() {
                   <button
                     type="button"
                     onClick={commitReassignment}
-                    disabled={reassignLoading}
+                    disabled={reassignLoading || !reassignmentPreviewIsCurrent}
                     className="rounded-lg bg-[#FF6B35] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {reassignLoading ? 'Transferring…' : `Confirm ${reassignPreview.count} transfers`}

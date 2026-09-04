@@ -19,7 +19,9 @@ try {
   await writeFile(compiledPath, compiled, { encoding: 'utf8', mode: 0o600 })
   const {
     buildGraderAssignments,
+    filterReassignmentCandidatesBySource,
     rankReassignmentCandidates,
+    reassignmentSourceOptions,
     reviewerPoolForRole,
   } = await import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
 
@@ -104,6 +106,16 @@ try {
     ['a1', 'a2', 'a4'],
     'reassignment ranking should prioritize low review counts, then high source backlog, and preserve reviewer pools',
   )
+  assert.deepEqual(reassignmentSourceOptions(ranked), [
+    { email: 'regular-b@berkeley.edu', available: 2 },
+    { email: 'regular-a@berkeley.edu', available: 1 },
+  ])
+  assert.deepEqual(
+    filterReassignmentCandidatesBySource(ranked, ' REGULAR-B@berkeley.edu ').map(candidate => candidate.assignmentId),
+    ['a1', 'a4'],
+  )
+  assert.equal(filterReassignmentCandidatesBySource(ranked, 'missing@berkeley.edu').length, 0)
+  assert.equal(filterReassignmentCandidatesBySource(ranked).length, ranked.length)
   console.log('Grader assignment unit checks passed.')
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true })

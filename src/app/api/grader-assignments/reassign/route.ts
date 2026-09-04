@@ -6,7 +6,9 @@ import { requireRole } from '@/lib/serverAuth'
 import { isEmail, isObjectId, readJsonObject } from '@/lib/apiValidation'
 import { consumeUserRateLimit } from '@/lib/rateLimit'
 import {
+  filterReassignmentCandidatesBySource,
   rankReassignmentCandidates,
+  reassignmentSourceOptions,
   ReassignmentCandidate,
   reviewerPoolForRole,
 } from '@/lib/graderAssignments'
@@ -98,8 +100,14 @@ export async function POST(req: NextRequest) {
   try {
     if (action === 'preview') {
       const count = body.count
+      const sourceEmail = typeof body.source_grader_email === 'string'
+        ? body.source_grader_email.trim().toLowerCase()
+        : ''
       if (!Number.isInteger(count) || Number(count) < 1 || Number(count) > MAX_TRANSFER_COUNT) {
         return NextResponse.json({ error: `Count must be an integer between 1 and ${MAX_TRANSFER_COUNT}.` }, { status: 400 })
+      }
+      if (sourceEmail && !isEmail(sourceEmail)) {
+        return NextResponse.json({ error: 'source_grader_email must be a valid email address.' }, { status: 400 })
       }
 
       const round = await requireActiveRubricRound(roundId)
@@ -180,12 +188,21 @@ export async function POST(req: NextRequest) {
         }]
       })
 
-      const ranked = rankReassignmentCandidates({
+      const rankedAll = rankReassignmentCandidates({
         candidates,
         targetEmail,
         targetPool,
         targetApplicantIds,
       })
+      const eligibleSources = reassignmentSourceOptions(rankedAll)
+      const ranked = filterReassignmentCandidatesBySource(rankedAll, sourceEmail)
+      if (sourceEmail && ranked.length === 0) {
+        throw new ReassignmentRejected(
+          `${sourceEmail} has no eligible pending assignments that can be transferred to this grader.`,
+          409,
+          0,
+        )
+      }
       const requestedCount = Number(count)
       if (ranked.length < requestedCount) {
         throw new ReassignmentRejected(
@@ -205,6 +222,9 @@ export async function POST(req: NextRequest) {
         target_grader_email: targetEmail,
         count: transfers.length,
         available: ranked.length,
+        total_available: rankedAll.length,
+        selected_source_grader_email: sourceEmail || null,
+        eligible_sources: eligibleSources,
         transfers,
         source_summary: sourceSummary(transfers),
       })
