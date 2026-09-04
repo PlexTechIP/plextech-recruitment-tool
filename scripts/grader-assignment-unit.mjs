@@ -65,7 +65,7 @@ try {
   assert.equal(reviewerPoolForRole('alumni'), null)
 
   const ranked = rankReassignmentCandidates({
-    targetEmail: 'finished@berkeley.edu',
+    targetEmail: 'target@berkeley.edu',
     targetPool: 'regular',
     targetApplicantIds: ['already-seen'],
     candidates: [
@@ -118,7 +118,7 @@ try {
   assert.equal(filterReassignmentCandidatesBySource(ranked).length, ranked.length)
 
   const crossPoolRanked = rankReassignmentCandidates({
-    targetEmail: 'finished-leader@berkeley.edu',
+    targetEmail: 'target-leader@berkeley.edu',
     targetPool: 'leadership',
     targetApplicantIds: [],
     allowedSourcePools: ['leadership', 'regular'],

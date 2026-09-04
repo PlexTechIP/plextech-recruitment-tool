@@ -54,22 +54,13 @@ async function requireActiveRubricRound(roundId: string, session?: ClientSession
   return round
 }
 
-function validateTargetFinished(
+function getTargetAssignments(
   targetEmail: string,
   assignments: { applicant_id: unknown; grader_email: string }[],
-  reviews: { applicant_id: unknown; grader_email: string }[],
 ) {
   const targetAssignments = assignments.filter(assignment => assignment.grader_email === targetEmail)
   if (targetAssignments.length === 0) {
     throw new ReassignmentRejected('The receiving grader has no assignments in this round.', 409)
-  }
-  const reviewed = new Set(
-    reviews
-      .filter(review => review.grader_email === targetEmail)
-      .map(review => String(review.applicant_id)),
-  )
-  if (targetAssignments.some(assignment => !reviewed.has(String(assignment.applicant_id)))) {
-    throw new ReassignmentRejected('The receiving grader must finish their current assignments first.', 409)
   }
   return targetAssignments
 }
@@ -123,7 +114,7 @@ export async function POST(req: NextRequest) {
         GraderAssignment.find({ round_id: roundId }).select('_id applicant_id grader_email').lean(),
         Review.find({ round_id: roundId }).select('applicant_id grader_email').lean(),
       ])
-      const targetAssignments = validateTargetFinished(targetEmail, assignments, reviews)
+      const targetAssignments = getTargetAssignments(targetEmail, assignments)
       const targetApplicantIds = [
         ...targetAssignments.map(assignment => String(assignment.applicant_id)),
         ...reviews
@@ -296,7 +287,7 @@ export async function POST(req: NextRequest) {
         .select('_id applicant_id grader_email submission_count').session(dbSession).lean()
       const allReviews = await Review.find({ round_id: roundId })
         .select('applicant_id grader_email').session(dbSession).lean()
-      const targetAssignments = validateTargetFinished(targetEmail, allAssignments, allReviews)
+      const targetAssignments = getTargetAssignments(targetEmail, allAssignments)
       const targetApplicantIds = new Set([
         ...targetAssignments.map(assignment => String(assignment.applicant_id)),
         ...allReviews
