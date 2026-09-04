@@ -546,7 +546,6 @@ export default function GradePage() {
                     className="w-full rounded-lg border border-[var(--border)]"
                     style={{ height: '70vh' }}
                     title={`${applicant.first_name ?? ''} ${applicant.last_name ?? ''} resume`}
-                    sandbox=""
                   />
                 ) : (
                   <p className="text-sm text-[var(--text-muted)] italic">No resume uploaded.</p>
