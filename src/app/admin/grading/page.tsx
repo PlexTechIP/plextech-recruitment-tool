@@ -9,6 +9,25 @@ interface GraderStat {
   email: string
   assigned: number
   completed: number
+  transferable_count: number
+}
+
+interface ReassignmentSource {
+  email: string
+  applicants: { id: string; name: string }[]
+}
+
+interface ReassignmentPreview {
+  target_grader_email: string
+  count: number
+  available: number
+  transfers: {
+    assignment_id: string
+    applicant_id: string
+    applicant_name: string
+    from_grader_email: string
+  }[]
+  source_summary: ReassignmentSource[]
 }
 
 interface ApplicantRow {
@@ -41,6 +60,12 @@ export default function GradingConsolePage() {
   const [expandedApplicant, setExpandedApplicant] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [reassignTarget, setReassignTarget] = useState<GraderStat | null>(null)
+  const [reassignCount, setReassignCount] = useState(5)
+  const [reassignPreview, setReassignPreview] = useState<ReassignmentPreview | null>(null)
+  const [reassignLoading, setReassignLoading] = useState(false)
+  const [reassignError, setReassignError] = useState('')
+  const [reassignMessage, setReassignMessage] = useState('')
 
   const loadStats = useCallback(async (roundId: string) => {
     setLoading(true)
@@ -91,6 +116,84 @@ export default function GradingConsolePage() {
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
+  }
+
+  function openReassignment(grader: GraderStat) {
+    setReassignTarget(grader)
+    setReassignCount(Math.min(5, grader.transferable_count))
+    setReassignPreview(null)
+    setReassignError('')
+  }
+
+  function closeReassignment() {
+    if (reassignLoading) return
+    setReassignTarget(null)
+    setReassignPreview(null)
+    setReassignError('')
+  }
+
+  async function previewReassignment() {
+    if (!reassignTarget || !selectedRoundId) return
+    setReassignLoading(true)
+    setReassignError('')
+    setReassignPreview(null)
+    try {
+      const response = await fetch('/api/grader-assignments/reassign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'preview',
+          round_id: selectedRoundId,
+          target_grader_email: reassignTarget.email,
+          count: reassignCount,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setReassignError(data.error ?? 'Unable to preview assignment transfers.')
+        return
+      }
+      setReassignPreview(data as ReassignmentPreview)
+    } catch {
+      setReassignError('Unable to reach the server. Please try again.')
+    } finally {
+      setReassignLoading(false)
+    }
+  }
+
+  async function commitReassignment() {
+    if (!reassignTarget || !selectedRoundId || !reassignPreview) return
+    setReassignLoading(true)
+    setReassignError('')
+    try {
+      const response = await fetch('/api/grader-assignments/reassign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'commit',
+          round_id: selectedRoundId,
+          target_grader_email: reassignTarget.email,
+          assignment_ids: reassignPreview.transfers.map(transfer => transfer.assignment_id),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setReassignPreview(null)
+        setReassignError(data.error ?? 'Unable to transfer assignments.')
+        return
+      }
+      setReassignMessage(
+        `Transferred ${data.moved} application${data.moved === 1 ? '' : 's'} to ${data.target_grader_email}.`,
+      )
+      setReassignTarget(null)
+      setReassignPreview(null)
+      await loadStats(selectedRoundId)
+    } catch {
+      setReassignPreview(null)
+      setReassignError('Unable to reach the server. Please preview the transfers again.')
+    } finally {
+      setReassignLoading(false)
+    }
   }
 
   const sortedApplicants = [...applicants].sort((a, b) => {
@@ -153,6 +256,12 @@ export default function GradingConsolePage() {
           </button>
         </div>
 
+        {reassignMessage && (
+          <div className="rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-600">
+            {reassignMessage}
+          </div>
+        )}
+
         {loading ? (
           <p className="text-[var(--text-muted)] text-sm">Loading…</p>
         ) : !selectedRoundId ? (
@@ -175,6 +284,7 @@ export default function GradingConsolePage() {
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Completed</th>
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Assigned</th>
                       <th className="px-5 py-2 text-xs text-[var(--text-muted)] font-medium w-40">Progress</th>
+                      <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border)]">
@@ -196,6 +306,21 @@ export default function GradingConsolePage() {
                               </div>
                               <span className={`text-xs w-8 text-right ${done ? 'text-green-500' : 'text-[var(--text-muted)]'}`}>{pct}%</span>
                             </div>
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => openReassignment(g)}
+                              disabled={!done || g.transferable_count === 0}
+                              title={!done
+                                ? 'This grader must finish their current assignments first.'
+                                : g.transferable_count === 0
+                                  ? 'No eligible pending assignments can be transferred.'
+                                  : `${g.transferable_count} pending assignments are eligible for transfer.`}
+                              className="whitespace-nowrap rounded-lg border border-[#FF6B35]/40 bg-[#FF6B35]/10 px-3 py-1.5 text-xs font-medium text-[#FF6B35] transition-colors hover:bg-[#FF6B35]/20 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Assign more
+                            </button>
                           </td>
                         </tr>
                       )
@@ -311,6 +436,140 @@ export default function GradingConsolePage() {
           </>
         )}
       </div>
+
+      {reassignTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="presentation"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget) closeReassignment()
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reassignment-title"
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-6 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="reassignment-title" className="text-lg font-semibold text-[var(--text-primary)]">
+                  Assign more to {reassignTarget.email}
+                </h2>
+                <p className="mt-1 text-sm text-[var(--text-muted)]">
+                  Pending work will be moved from graders in the same reviewer pool. Every applicant keeps exactly two reviewers.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeReassignment}
+                disabled={reassignLoading}
+                aria-label="Close"
+                className="text-xl text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40"
+              >
+                ×
+              </button>
+            </div>
+
+            {!reassignPreview ? (
+              <div className="mt-5 space-y-4">
+                <label className="block text-sm text-[var(--text-secondary)]">
+                  Applications to transfer
+                  <input
+                    type="number"
+                    min={1}
+                    max={Math.min(20, reassignTarget.transferable_count)}
+                    value={reassignCount}
+                    onChange={event => {
+                      setReassignCount(Number(event.target.value))
+                      setReassignError('')
+                    }}
+                    className="mt-1 block w-28 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2 text-[var(--text-primary)] focus:border-[#FF6B35] focus:outline-none"
+                  />
+                </label>
+                <p className="text-xs text-[var(--text-muted)]">
+                  {reassignTarget.transferable_count} eligible pending assignment{reassignTarget.transferable_count === 1 ? '' : 's'} available.
+                </p>
+                {reassignError && <p className="text-sm text-red-500">{reassignError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeReassignment}
+                    disabled={reassignLoading}
+                    className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-raised)] disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={previewReassignment}
+                    disabled={
+                      reassignLoading
+                      || !Number.isInteger(reassignCount)
+                      || reassignCount < 1
+                      || reassignCount > 20
+                      || reassignCount > reassignTarget.transferable_count
+                    }
+                    className="rounded-lg bg-[#FF6B35] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {reassignLoading ? 'Preparing…' : 'Preview transfers'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 space-y-4">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+                  <p className="font-medium text-[var(--text-primary)]">
+                    Transfer {reassignPreview.count} application{reassignPreview.count === 1 ? '' : 's'} to {reassignPreview.target_grader_email}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Review the source graders and applicants below before confirming.
+                  </p>
+                  <p className="mt-2 text-xs text-amber-600">
+                    The system can detect submitted reviews, but not work currently open in another grader&apos;s browser. Confirm these graders are not actively reviewing the listed applicants.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  {reassignPreview.source_summary.map(source => (
+                    <div key={source.email} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] p-4">
+                      <p className="text-sm font-medium text-[var(--text-primary)]">
+                        {source.applicants.length} from {source.email}
+                      </p>
+                      <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]">
+                        {source.applicants.map(applicant => <li key={applicant.id}>• {applicant.name}</li>)}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+
+                {reassignError && <p className="text-sm text-red-500">{reassignError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReassignPreview(null)
+                      setReassignError('')
+                    }}
+                    disabled={reassignLoading}
+                    className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-raised)] disabled:opacity-40"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={commitReassignment}
+                    disabled={reassignLoading}
+                    className="rounded-lg bg-[#FF6B35] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {reassignLoading ? 'Transferring…' : `Confirm ${reassignPreview.count} transfers`}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   )
 }

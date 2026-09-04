@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
-import { GraderAssignment, Review, Applicant } from '@/lib/models'
+import { GraderAssignment, Review, Applicant, AuthorizedUser } from '@/lib/models'
 import { evaluateResults } from '@/lib/scoring'
 import { Review as ReviewType, Applicant as ApplicantType } from '@/lib/types'
 import { requireRole } from '@/lib/serverAuth'
 import { isObjectId } from '@/lib/apiValidation'
+import { reviewerPoolForRole } from '@/lib/graderAssignments'
 
 export async function GET(req: NextRequest) {
   const auth = await requireRole('leadership')
@@ -21,6 +22,11 @@ export async function GET(req: NextRequest) {
     GraderAssignment.find({ round_id }).lean(),
     Review.find({ round_id }).lean(),
   ])
+  const graderEmails = [...new Set(assignments.map(assignment => assignment.grader_email))]
+  const authorizedUsers = await AuthorizedUser.find({
+    email: mongoose.trusted({ $in: graderEmails }),
+  }).select('email role').lean()
+  const poolByEmail = new Map(authorizedUsers.map(user => [user.email, reviewerPoolForRole(user.role)]))
 
   // Grader progress
   const graderMap = new Map<string, { assigned: number; completed: number }>()
@@ -35,8 +41,41 @@ export async function GET(req: NextRequest) {
       graderMap.get(a.grader_email)!.completed++
     }
   }
+  const assignmentsByGrader = new Map<string, Set<string>>()
+  const reviewersByApplicant = new Map<string, Set<string>>()
+  for (const assignment of assignments) {
+    const current = assignmentsByGrader.get(assignment.grader_email) ?? new Set<string>()
+    current.add(assignment.applicant_id.toString())
+    assignmentsByGrader.set(assignment.grader_email, current)
+    const applicantReviewers = reviewersByApplicant.get(assignment.applicant_id.toString()) ?? new Set<string>()
+    applicantReviewers.add(assignment.grader_email)
+    reviewersByApplicant.set(assignment.applicant_id.toString(), applicantReviewers)
+  }
+  const pendingAssignments = assignments.filter(assignment => (
+    !reviewedSet.has(`${assignment.grader_email}::${assignment.applicant_id}`)
+  ))
   const graders = [...graderMap.entries()]
-    .map(([email, stats]) => ({ email, ...stats }))
+    .map(([email, stats]) => {
+      const targetPool = poolByEmail.get(email)
+      const targetApplicants = assignmentsByGrader.get(email) ?? new Set<string>()
+      const transferableApplicants = new Set(
+        pendingAssignments
+          .filter(assignment => (
+            assignment.grader_email !== email
+            && targetPool !== null
+            && targetPool !== undefined
+            && poolByEmail.get(assignment.grader_email) === targetPool
+            && !targetApplicants.has(assignment.applicant_id.toString())
+            && reviewersByApplicant.get(assignment.applicant_id.toString())?.size === 2
+          ))
+          .map(assignment => assignment.applicant_id.toString()),
+      )
+      return {
+        email,
+        ...stats,
+        transferable_count: stats.completed === stats.assigned ? transferableApplicants.size : 0,
+      }
+    })
     .sort((a, b) => b.completed - a.completed)
 
   // Applicant scores

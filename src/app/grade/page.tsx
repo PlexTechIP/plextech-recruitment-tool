@@ -51,6 +51,8 @@ export default function GradePage() {
   const [submitting, setSubmitting] = useState(false)
   const [loadingRounds, setLoadingRounds] = useState(true)
   const [loadingQueue, setLoadingQueue] = useState(false)
+  const [refreshingAssignments, setRefreshingAssignments] = useState(false)
+  const [refreshMessage, setRefreshMessage] = useState('')
   const resumeRef = useRef<HTMLDivElement>(null)
 
   // Scroll to resume section when essay confirmed
@@ -146,7 +148,7 @@ export default function GradePage() {
     return solePendingRoundId
   }
 
-  async function loadQueue(roundId: string, graderEmail: string) {
+  async function loadQueue(roundId: string, graderEmail: string): Promise<number> {
     setLoadingQueue(true)
     setQueueIndex(0)
     setEssayConfirmed(false)
@@ -174,7 +176,7 @@ export default function GradePage() {
     if (pendingIds.length === 0) {
       setQueue([])
       setLoadingQueue(false)
-      return
+      return 0
     }
 
     // Load the relatively small essay payloads for the queue. Resume files are
@@ -193,6 +195,7 @@ export default function GradePage() {
 
     setQueue(fullQueue)
     setLoadingQueue(false)
+    return fullQueue.length
   }
 
   // Resolve auth and then load the initial queue from the asynchronous auth
@@ -217,6 +220,23 @@ export default function GradePage() {
 
   function setComment(key: CKey, value: string) {
     setComments(prev => ({ ...prev, [key]: value }))
+  }
+
+  async function checkForNewAssignments() {
+    if (!user || !selectedRoundId) return
+    setRefreshingAssignments(true)
+    setRefreshMessage('')
+    try {
+      const pendingCount = await loadQueue(selectedRoundId, user.email)
+      if (pendingCount === 0) {
+        setRefreshMessage('No new assignments yet.')
+      }
+    } catch {
+      setLoadingQueue(false)
+      setRefreshMessage('Unable to check for new assignments. Please try again.')
+    } finally {
+      setRefreshingAssignments(false)
+    }
   }
 
   async function handleSubmit() {
@@ -382,12 +402,22 @@ export default function GradePage() {
         <div className="text-center space-y-4">
           <p className="text-3xl font-bold text-[var(--text-primary)]">All done!</p>
           <p className="text-[var(--text-muted)]">You have reviewed all {totalAssigned} assigned applicants for this round.</p>
-          <button
-            className="mt-4 px-4 py-2 rounded-lg bg-[#ff8a00] text-white font-medium hover:opacity-90 transition-opacity"
-            onClick={() => { setSelectedRoundId(null); loadRoundSummaries(user.email) }}
-          >
-            Back to Rounds
-          </button>
+          {refreshMessage && <p className="text-sm text-[var(--text-muted)]">{refreshMessage}</p>}
+          <div className="flex flex-wrap justify-center gap-2 pt-2">
+            <button
+              className="px-4 py-2 rounded-lg bg-[#ff8a00] text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+              onClick={checkForNewAssignments}
+              disabled={refreshingAssignments}
+            >
+              {refreshingAssignments ? 'Checking…' : 'Check for new assignments'}
+            </button>
+            <button
+              className="px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-secondary)] font-medium hover:bg-[var(--bg-raised)] transition-colors"
+              onClick={() => { setSelectedRoundId(null); void loadRoundSummaries(user.email) }}
+            >
+              Back to Rounds
+            </button>
+          </div>
         </div>
       </main>
     )
