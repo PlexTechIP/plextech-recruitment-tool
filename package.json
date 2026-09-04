@@ -12,6 +12,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:security": "node scripts/security-unit.mjs",
+    "test:assignments": "node scripts/grader-assignment-unit.mjs",
     "test:indexes": "node scripts/verify-indexes.mjs",
     "db:security:preflight": "node scripts/migrate-security-indexes.mjs",
     "db:security:apply": "node scripts/migrate-security-indexes.mjs --apply",

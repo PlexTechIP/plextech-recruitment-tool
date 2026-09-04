@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
 import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
+import { buildGraderAssignments } from '@/lib/graderAssignments'
 import Papa from 'papaparse'
 
 // ─── tiny shared UI ──────────────────────────────────────────
@@ -407,27 +408,18 @@ export default function AdminPage() {
     const applicants = (appsData ?? []).map(a => a.id)
 
     if (applicants.length === 0) { setAssignMessage('No applicants found for this cycle.'); setAssignLoading(false); return }
-    if (members.length + leadership.length === 0) { setAssignMessage('No graders found.'); setAssignLoading(false); return }
-
-    const MEMBER_REDUNDANCY = 2
-    const LEADER_REDUNDANCY = 1
-    const rows: { round_id: string; applicant_id: string; grader_email: string }[] = []
-
-    let mp = 0, lp = 0
-    for (const appId of applicants) {
-      const assigned = new Set<string>()
-      for (let i = 0; i < MEMBER_REDUNDANCY && members.length > 0; i++) {
-        assigned.add(members[mp % members.length])
-        mp++
-      }
-      for (let i = 0; i < LEADER_REDUNDANCY && leadership.length > 0; i++) {
-        assigned.add(leadership[lp % leadership.length])
-        lp++
-      }
-      for (const email of assigned) {
-        rows.push({ round_id: selectedRound.id, applicant_id: appId, grader_email: email })
-      }
+    if (members.length < 1 || leadership.length < 1) {
+      setAssignMessage('Assignment failed: at least one regular grader and one leadership/admin reviewer are required.')
+      setAssignLoading(false)
+      return
     }
+
+    const rows = buildGraderAssignments({
+      roundId: selectedRound.id,
+      applicantIds: applicants,
+      memberEmails: members,
+      leadershipEmails: leadership,
+    })
 
     const assignmentRes = await fetch('/api/grader-assignments', {
       method: 'POST',
@@ -529,18 +521,18 @@ export default function AdminPage() {
     const applicants = (appsData ?? []).map(a => a.id)
 
     if (applicants.length === 0) { setStartGradingMessage('Round created, but no applicants found to assign.'); setStartGradingLoading(false); return }
-    if (members.length + leadership.length === 0) { setStartGradingMessage('Round created, but no graders found.'); setStartGradingLoading(false); return }
-
-    const MEMBER_REDUNDANCY = 2
-    const LEADER_REDUNDANCY = 1
-    const rows: { round_id: string; applicant_id: string; grader_email: string }[] = []
-    let mp = 0, lp = 0
-    for (const appId of applicants) {
-      const assigned = new Set<string>()
-      for (let i = 0; i < MEMBER_REDUNDANCY && members.length > 0; i++) { assigned.add(members[mp % members.length]); mp++ }
-      for (let i = 0; i < LEADER_REDUNDANCY && leadership.length > 0; i++) { assigned.add(leadership[lp % leadership.length]); lp++ }
-      for (const email of assigned) rows.push({ round_id: newRound.id, applicant_id: appId, grader_email: email })
+    if (members.length < 1 || leadership.length < 1) {
+      setStartGradingMessage('Round created, but assignment failed: at least one regular grader and one leadership/admin reviewer are required.')
+      setStartGradingLoading(false)
+      return
     }
+
+    const rows = buildGraderAssignments({
+      roundId: newRound.id,
+      applicantIds: applicants,
+      memberEmails: members,
+      leadershipEmails: leadership,
+    })
 
     const assignmentRes = await fetch('/api/grader-assignments', {
       method: 'POST',
@@ -1314,7 +1306,7 @@ export default function AdminPage() {
                     <div className="pt-3 border-t border-[var(--border)] space-y-2">
                       <p className="text-sm font-medium text-[var(--text-primary)]">Grader Assignment</p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        Assigns all applicants to graders using round-robin (2 graders + 1 leadership per applicant). Run this once when the application deadline has passed.
+                        Assigns two reviewers per applicant using round-robin: 1 regular grader + 1 leadership/admin reviewer.
                       </p>
                       <div className="flex gap-2 items-center">
                         <button
