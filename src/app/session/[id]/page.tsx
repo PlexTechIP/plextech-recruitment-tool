@@ -33,6 +33,7 @@ type ApplicantInfo = {
   linkedin: string | null
   website: string | null
   has_resume: boolean
+  infosessions_attended: string[]
 }
 
 type GenderCategory = 'male' | 'female' | 'other' | 'unknown'
@@ -882,6 +883,23 @@ function CandidateDetail({
       {candidate.applicant_id && applicantInfo && (
         <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
           <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Applicant materials</p>
+          <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-[var(--text-primary)]">Attended infosession?</span>
+              <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                applicantInfo.infosessions_attended.length > 0
+                  ? 'border-green-500/30 bg-green-500/10 text-green-600'
+                  : 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)]'
+              }`}>
+                {applicantInfo.infosessions_attended.length > 0 ? 'Yes' : 'No'}
+              </span>
+            </div>
+            {applicantInfo.infosessions_attended.length > 0 && (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                {applicantInfo.infosessions_attended.join(' · ')}
+              </p>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
             {safeExternalUrl(applicantInfo.linkedin) && (
               <a

@@ -70,6 +70,7 @@ const ApplicantSchema = new Schema({
   linkedin:       { type: String, default: null },
   website:        { type: String, default: null },
   time_commitment:{ type: String, default: null },
+  infosessions_attended: { type: [String], default: [] },
   resume_base64:  { type: String, default: null, select: false, maxlength: 4_300_000 }, // base64-encoded PDF
   created_at:     { type: Date, default: Date.now },
 })

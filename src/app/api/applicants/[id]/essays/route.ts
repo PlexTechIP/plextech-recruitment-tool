@@ -33,7 +33,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const [applicantDoc, resumeDoc, responses] = await Promise.all([
     Applicant.findById(id)
-      .select('cycle_id first_name last_name year transfer major desired_roles linkedin website time_commitment')
+      .select('cycle_id first_name last_name year transfer major desired_roles linkedin website time_commitment infosessions_attended')
       .lean(),
     Applicant.collection.findOne(
       { _id: new mongoose.Types.ObjectId(id), resume_base64: { $type: 'string' } },
@@ -56,6 +56,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     linkedin: applicantDoc.linkedin,
     website: applicantDoc.website,
     time_commitment: applicantDoc.time_commitment,
+    infosessions_attended: Array.isArray(applicantDoc.infosessions_attended)
+      ? applicantDoc.infosessions_attended
+      : [],
     has_resume: Boolean(resumeDoc),
   }
 
