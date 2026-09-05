@@ -63,6 +63,14 @@ async function main() {
     join(process.cwd(), 'src/app/api/grader-assignments/reassign/route.ts'),
     'utf8',
   )
+  const bulkStatusRouteSource = await readFile(
+    join(process.cwd(), 'src/app/api/candidates/bulk-status/route.ts'),
+    'utf8',
+  )
+  const resumeRouteSource = await readFile(
+    join(process.cwd(), 'src/app/api/applicants/[id]/resume/route.ts'),
+    'utf8',
+  )
 
   try {
     const valid = await readJsonObject(jsonRequest({ name: 'PlexTech', nested: { ok: true } }))
@@ -133,6 +141,36 @@ async function main() {
       reassignmentRouteSource,
       /requireRole\('admin'\)/,
       'grader reassignment must remain admin-only',
+    )
+    assert.match(
+      bulkStatusRouteSource,
+      /requireRole\('grader'\)/,
+      'bulk candidate status updates must require an authenticated portal member',
+    )
+    assert.match(
+      bulkStatusRouteSource,
+      /if \(auth\.role !== 'admin'\) sessionFilter\.created_by = auth\.email/,
+      'bulk candidate status updates must remain limited to admins or the session creator',
+    )
+    assert.match(
+      bulkStatusRouteSource,
+      /mongoose\.connection\.transaction/,
+      'bulk candidate status updates must be transactional',
+    )
+    assert.match(
+      bulkStatusRouteSource,
+      /candidates\.length !== uniqueIds\.length/,
+      'bulk candidate status updates must reject cross-session candidate IDs atomically',
+    )
+    assert.match(
+      resumeRouteSource,
+      /SessionMember\.exists/,
+      'deliberation resume access must require membership for regular graders',
+    )
+    assert.match(
+      resumeRouteSource,
+      /Content-Disposition': 'inline; filename="resume\.pdf"'/,
+      'inline resume responses must use a fixed safe filename',
     )
 
     const validPdf = await PDFDocument.create({ updateMetadata: false })

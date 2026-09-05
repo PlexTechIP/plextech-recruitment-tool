@@ -29,6 +29,22 @@ const STATUS_BTN: Record<string, { active: string; inactive: string }> = {
   pending: { active: 'bg-[var(--bg-active)] text-[var(--text-primary)] border-transparent', inactive: 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]' },
 }
 
+type ApplicantInfo = {
+  linkedin: string | null
+  website: string | null
+  has_resume: boolean
+}
+
+function safeExternalUrl(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
 export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = use(params)
   const router = useRouter()
@@ -46,6 +62,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [search, setSearch] = useState('')
   const [idCopied, setIdCopied] = useState(false)
   const [viewMode, setViewMode] = useState<'candidate' | 'list'>('candidate')
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set())
+  const [bulkUpdating, setBulkUpdating] = useState(false)
 
   function copySessionId() {
     navigator.clipboard.writeText(sessionId)
@@ -205,11 +224,54 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }
 
   async function handleStatusChange(candidateId: string, status: string) {
-    await fetch(`/api/candidates/${candidateId}`, {
+    const res = await fetch(`/api/candidates/${candidateId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert(`Could not update status: ${err?.error ?? res.statusText}`)
+      return
+    }
+    await loadData()
+  }
+
+  function toggleCandidateSelection(candidateId: string) {
+    setSelectedCandidateIds(current => {
+      const next = new Set(current)
+      if (next.has(candidateId)) next.delete(candidateId)
+      else next.add(candidateId)
+      return next
+    })
+  }
+
+  function exitBulkMode() {
+    setBulkMode(false)
+    setSelectedCandidateIds(new Set())
+  }
+
+  async function handleBulkStatusChange(status: string) {
+    const candidateIds = [...selectedCandidateIds]
+    if (candidateIds.length === 0 || bulkUpdating) return
+    const label = status.charAt(0).toUpperCase() + status.slice(1)
+    if (!confirm(`Set ${candidateIds.length} selected candidate${candidateIds.length === 1 ? '' : 's'} to ${label}?`)) return
+
+    setBulkUpdating(true)
+    const res = await fetch('/api/candidates/bulk-status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, candidate_ids: candidateIds, status }),
+    })
+    setBulkUpdating(false)
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert(`Could not update selected candidates: ${err?.error ?? res.statusText}`)
+      return
+    }
+
+    exitBulkMode()
     await loadData()
   }
 
@@ -303,6 +365,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-sm text-[var(--text-muted)] hidden sm:block">{myName}</span>
+          {isAdmin && (
+            <button
+              onClick={() => bulkMode ? exitBulkMode() : setBulkMode(true)}
+              className={`text-xs border px-2.5 py-1.5 rounded-lg transition-colors ${
+                bulkMode
+                  ? 'bg-[#FF6B35]/15 text-[#FF6B35] border-[#FF6B35]/40'
+                  : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {bulkMode ? 'Exit selection' : 'Select multiple'}
+            </button>
+          )}
           {/* View toggle */}
           <div className="flex items-center bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg p-0.5 gap-0.5">
             <button
@@ -332,12 +406,43 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         </div>
       </header>
 
+      {isAdmin && bulkMode && (
+        <div className="shrink-0 flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2">
+          <span className="mr-1 text-sm font-medium text-[var(--text-primary)]">
+            {selectedCandidateIds.size} selected
+          </span>
+          {(['accepted', 'rejected', 'hold', 'pending'] as const).map(status => (
+            <button
+              key={status}
+              type="button"
+              disabled={selectedCandidateIds.size === 0 || bulkUpdating}
+              onClick={() => handleBulkStatusChange(status)}
+              className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-opacity disabled:cursor-not-allowed disabled:opacity-40 ${STATUS_BTN[status].inactive}`}
+            >
+              {status.charAt(0).toUpperCase() + status.slice(1)}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={selectedCandidateIds.size === 0 || bulkUpdating}
+            onClick={() => setSelectedCandidateIds(new Set())}
+            className="ml-auto rounded-md border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-40"
+          >
+            Clear
+          </button>
+          {bulkUpdating && <span className="text-xs text-[var(--text-muted)]">Updating…</span>}
+        </div>
+      )}
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
       {viewMode === 'list' ? (
         <ListView
           candidates={candidates}
           votes={votes}
+          bulkMode={isAdmin && bulkMode}
+          selectedIds={selectedCandidateIds}
+          onToggleSelection={toggleCandidateSelection}
           onSelect={(candidate) => { setSelectedId(candidate.id); setViewMode('candidate') }}
         />
       ) : (<>
@@ -397,30 +502,46 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                 const flags = cv.filter(v => v.vote_type === 'red_flag').length
                 const isSelected = selected?.id === c.id
 
+                const isChecked = selectedCandidateIds.has(c.id)
+
                 return (
-                  <button
+                  <div
                     key={c.id}
-                    onClick={() => setSelectedId(c.id)}
-                    className={`w-full text-left px-3 py-2.5 border-b border-[var(--border)]/50 transition-colors hover:bg-[var(--bg-raised)]${
-                      isSelected ? 'bg-[var(--bg-raised)] border-l-2 border-l-[#FF6B35]' : ''
-                    }`}
+                    className={`flex items-center border-b border-[var(--border)]/50 transition-colors hover:bg-[var(--bg-raised)]${
+                      isSelected ? ' bg-[var(--bg-raised)] border-l-2 border-l-[#FF6B35]' : ''
+                    }${isChecked ? ' bg-[#FF6B35]/10' : ''}`}
                   >
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`} />
-                      <span className="text-sm text-[var(--text-primary)] font-medium truncate flex-1">{c.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1 ml-4">
-                      {c.data.score != null && (
-                        <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(1)}</span>
-                      )}
-                      {c.data.Scores != null && c.data.score == null && (
-                        <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
-                      )}
-                      {vouches > 0 && <span className="text-xs text-green-500">+{vouches}</span>}
-                      {antis > 0 && <span className="text-xs text-orange-500">-{antis}</span>}
-                      {flags > 0 && <span className="text-xs text-red-500">⚑{flags}</span>}
-                    </div>
-                  </button>
+                    {isAdmin && bulkMode && (
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleCandidateSelection(c.id)}
+                        aria-label={`Select ${c.name}`}
+                        className="ml-3 h-4 w-4 shrink-0 accent-[#FF6B35]"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => bulkMode && isAdmin ? toggleCandidateSelection(c.id) : setSelectedId(c.id)}
+                      className="min-w-0 flex-1 px-3 py-2.5 text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`} />
+                        <span className="text-sm text-[var(--text-primary)] font-medium truncate flex-1">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 ml-4">
+                        {c.data.score != null && (
+                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(1)}</span>
+                        )}
+                        {c.data.Scores != null && c.data.score == null && (
+                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
+                        )}
+                        {vouches > 0 && <span className="text-xs text-green-500">+{vouches}</span>}
+                        {antis > 0 && <span className="text-xs text-orange-500">-{antis}</span>}
+                        {flags > 0 && <span className="text-xs text-red-500">⚑{flags}</span>}
+                      </div>
+                    </button>
+                  </div>
                 )
               })
             )}
@@ -457,10 +578,16 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 function ListView({
   candidates,
   votes,
+  bulkMode,
+  selectedIds,
+  onToggleSelection,
   onSelect,
 }: {
   candidates: Candidate[]
   votes: Vote[]
+  bulkMode: boolean
+  selectedIds: Set<string>
+  onToggleSelection: (id: string) => void
   onSelect: (c: Candidate) => void
 }) {
   const [search, setSearch] = useState('')
@@ -472,6 +599,15 @@ function ListView({
     .sort((a, b) => (STATUS_ORDER[a.status] ?? 2) - (STATUS_ORDER[b.status] ?? 2))
 
   function cvotes(id: string) { return votes.filter(v => v.candidate_id === id) }
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every(candidate => selectedIds.has(candidate.id))
+
+  function toggleAllVisible() {
+    const shouldSelect = !allVisibleSelected
+    for (const candidate of filtered) {
+      if (selectedIds.has(candidate.id) !== shouldSelect) onToggleSelection(candidate.id)
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -491,6 +627,17 @@ function ListView({
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 bg-[var(--bg-surface)] z-10">
             <tr className="border-b border-[var(--border)]">
+              {bulkMode && (
+                <th className="w-10 px-3 py-2.5 text-center">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                    aria-label="Select all visible candidates"
+                    className="h-4 w-4 accent-[#FF6B35]"
+                  />
+                </th>
+              )}
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider w-full">Name</th>
               <th className="text-left px-4 py-2.5 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider whitespace-nowrap">Status</th>
               <th className="text-right px-4 py-2.5 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wider whitespace-nowrap">Score</th>
@@ -510,9 +657,20 @@ function ListView({
               return (
                 <tr
                   key={c.id}
-                  onClick={() => onSelect(c)}
-                  className="border-b border-[var(--border)]/50 hover:bg-[var(--bg-raised)] cursor-pointer transition-colors"
+                  onClick={() => bulkMode ? onToggleSelection(c.id) : onSelect(c)}
+                  className={`border-b border-[var(--border)]/50 hover:bg-[var(--bg-raised)] cursor-pointer transition-colors ${selectedIds.has(c.id) ? 'bg-[#FF6B35]/10' : ''}`}
                 >
+                  {bulkMode && (
+                    <td className="px-3 py-3 text-center" onClick={event => event.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(c.id)}
+                        onChange={() => onToggleSelection(c.id)}
+                        aria-label={`Select ${c.name}`}
+                        className="h-4 w-4 accent-[#FF6B35]"
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`} />
@@ -573,7 +731,8 @@ function CandidateDetail({
   const [submitting, setSubmitting] = useState(false)
 
   const [essays, setEssays] = useState<{ prompt: { question_number: number; prompt: string }; response: string }[] | null>(null)
-  const [essaysLoading, setEssaysLoading] = useState(false)
+  const [applicantInfo, setApplicantInfo] = useState<ApplicantInfo | null>(null)
+  const [essaysLoading, setEssaysLoading] = useState(!!candidate.applicant_id)
 
   useEffect(() => {
     fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
@@ -586,12 +745,13 @@ function CandidateDetail({
 
   // Lazily load the applicant's essay responses when this candidate is opened.
   useEffect(() => {
-    setEssays(null)
     if (!candidate.applicant_id) return
-    setEssaysLoading(true)
     fetch(`/api/applicants/${candidate.applicant_id}/essays`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => setEssays(data?.essays ?? []))
+      .then(data => {
+        setApplicantInfo(data?.applicant ?? null)
+        setEssays(data?.essays ?? [])
+      })
       .finally(() => setEssaysLoading(false))
   }, [candidate.id, candidate.applicant_id])
 
@@ -628,6 +788,56 @@ function CandidateDetail({
 
       {/* Dynamic fields from data JSON */}
       <DataFields data={candidate.data} />
+
+      {candidate.applicant_id && applicantInfo && (
+        <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Applicant materials</p>
+          <div className="flex flex-wrap gap-2">
+            {safeExternalUrl(applicantInfo.linkedin) && (
+              <a
+                href={safeExternalUrl(applicantInfo.linkedin)!}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:border-[#FF6B35]/50"
+              >
+                Open LinkedIn ↗
+              </a>
+            )}
+            {safeExternalUrl(applicantInfo.website) && (
+              <a
+                href={safeExternalUrl(applicantInfo.website)!}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:border-[#FF6B35]/50"
+              >
+                Open website ↗
+              </a>
+            )}
+            {applicantInfo.has_resume ? (
+              <a
+                href={`/api/applicants/${candidate.applicant_id}/resume?format=pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] hover:border-[#FF6B35]/50"
+              >
+                Open résumé ↗
+              </a>
+            ) : (
+              <span className="px-1 py-1.5 text-sm italic text-[var(--text-muted)]">No résumé uploaded</span>
+            )}
+          </div>
+          {applicantInfo.has_resume && (
+            <details className="mt-3 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-[var(--text-primary)]">View résumé here</summary>
+              <iframe
+                src={`/api/applicants/${candidate.applicant_id}/resume?format=pdf`}
+                className="h-[70vh] w-full border-t border-[var(--border)] bg-white"
+                title={`${candidate.name} résumé`}
+              />
+            </details>
+          )}
+        </div>
+      )}
 
       {/* Application essays */}
       {candidate.applicant_id && (essaysLoading || (essays && essays.length > 0)) && (

@@ -31,10 +31,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     }
   }
 
-  const [applicantDoc, responses] = await Promise.all([
+  const [applicantDoc, resumeDoc, responses] = await Promise.all([
     Applicant.findById(id)
       .select('cycle_id first_name last_name year transfer major desired_roles linkedin website time_commitment')
       .lean(),
+    Applicant.collection.findOne(
+      { _id: new mongoose.Types.ObjectId(id), resume_base64: { $type: 'string' } },
+      { projection: { _id: 1 } },
+    ),
     EssayResponse.find({ applicant_id: id }).lean(),
   ])
 
@@ -52,6 +56,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     linkedin: applicantDoc.linkedin,
     website: applicantDoc.website,
     time_commitment: applicantDoc.time_commitment,
+    has_resume: Boolean(resumeDoc),
   }
 
   const promptIds = responses.map(r => r.prompt_id)
