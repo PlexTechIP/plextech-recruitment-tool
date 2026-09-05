@@ -10,7 +10,7 @@ const commonCsp = [
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: https:",
   "connect-src 'self'",
-  "frame-src 'self' data:",
+  "frame-src 'self' data: blob:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
