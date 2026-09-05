@@ -733,6 +733,10 @@ function CandidateDetail({
   const [essays, setEssays] = useState<{ prompt: { question_number: number; prompt: string }; response: string }[] | null>(null)
   const [applicantInfo, setApplicantInfo] = useState<ApplicantInfo | null>(null)
   const [essaysLoading, setEssaysLoading] = useState(!!candidate.applicant_id)
+  const [resumeOpen, setResumeOpen] = useState(false)
+  const [resumeObjectUrl, setResumeObjectUrl] = useState<string | null>(null)
+  const [resumeLoading, setResumeLoading] = useState(false)
+  const [resumeError, setResumeError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
@@ -754,6 +758,36 @@ function CandidateDetail({
       })
       .finally(() => setEssaysLoading(false))
   }, [candidate.id, candidate.applicant_id])
+
+  useEffect(() => () => {
+    if (resumeObjectUrl) URL.revokeObjectURL(resumeObjectUrl)
+  }, [resumeObjectUrl])
+
+  async function toggleResumeViewer() {
+    if (resumeOpen) {
+      setResumeOpen(false)
+      return
+    }
+
+    setResumeOpen(true)
+    if (!candidate.applicant_id || resumeObjectUrl || resumeLoading) return
+
+    setResumeLoading(true)
+    setResumeError(null)
+    try {
+      const response = await fetch(`/api/applicants/${candidate.applicant_id}/resume?format=pdf`)
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error?.error ?? 'Unable to load this résumé.')
+      }
+      const blob = await response.blob()
+      setResumeObjectUrl(URL.createObjectURL(blob))
+    } catch (error) {
+      setResumeError(error instanceof Error ? error.message : 'Unable to load this résumé.')
+    } finally {
+      setResumeLoading(false)
+    }
+  }
 
   async function deleteNote(noteId: string) {
     await fetch(`/api/candidate-notes?id=${noteId}`, { method: 'DELETE' })
@@ -827,14 +861,29 @@ function CandidateDetail({
             )}
           </div>
           {applicantInfo.has_resume && (
-            <details className="mt-3 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60">
-              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-[var(--text-primary)]">View résumé here</summary>
-              <iframe
-                src={`/api/applicants/${candidate.applicant_id}/resume?format=pdf`}
-                className="h-[70vh] w-full border-t border-[var(--border)] bg-white"
-                title={`${candidate.name} résumé`}
-              />
-            </details>
+            <div className="mt-3 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60">
+              <button
+                type="button"
+                onClick={toggleResumeViewer}
+                aria-expanded={resumeOpen}
+                className="w-full cursor-pointer px-3 py-2 text-left text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-active)]"
+              >
+                {resumeOpen ? 'Hide résumé' : 'View résumé here'}
+              </button>
+              {resumeOpen && (
+                <div className="border-t border-[var(--border)]">
+                  {resumeLoading && <p className="p-4 text-sm text-[var(--text-muted)]">Loading résumé…</p>}
+                  {resumeError && <p className="p-4 text-sm text-red-500">{resumeError}</p>}
+                  {resumeObjectUrl && !resumeLoading && !resumeError && (
+                    <iframe
+                      src={resumeObjectUrl}
+                      className="h-[70vh] w-full bg-white"
+                      title={`${candidate.name} résumé`}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
