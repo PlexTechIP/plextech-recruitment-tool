@@ -467,6 +467,12 @@ export default function GradePage() {
             <Field label="Year" value={`${applicant.year ?? 'N/A'}${applicant.transfer ? ' (Transfer)' : ''}`} />
             <Field label="Major" value={applicant.major ?? 'N/A'} />
             <Field label="Desired Role" value={applicant.desired_roles ?? 'Not specified'} />
+            <Field
+              label="Attended Infosession?"
+              value={applicant.infosessions_attended?.length
+                ? `Yes — ${applicant.infosessions_attended.join(', ')}`
+                : 'No'}
+            />
             {essayConfirmed && (
               <>
                 {applicant.linkedin && <Field label="LinkedIn" value={applicant.linkedin} />}

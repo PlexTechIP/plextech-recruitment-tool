@@ -140,6 +140,7 @@ export interface Applicant {
   linkedin: string | null
   website: string | null
   time_commitment: string | null
+  infosessions_attended: string[]
   resume_url: string | null
   created_at: string
 }

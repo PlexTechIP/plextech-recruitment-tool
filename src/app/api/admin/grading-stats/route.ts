@@ -105,6 +105,7 @@ export async function GET(req: NextRequest) {
     linkedin: a.linkedin,
     website: a.website,
     time_commitment: a.time_commitment,
+    infosessions_attended: Array.isArray(a.infosessions_attended) ? a.infosessions_attended : [],
     resume_url: null,
     created_at: a.created_at,
   }))
