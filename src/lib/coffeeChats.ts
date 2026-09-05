@@ -15,6 +15,7 @@ export type MatchedCoffeeChatRow = {
   applicant_name: string
   chatter_name: string
   notes: string
+  recommended_overall: boolean | null
   chat_date: string | null
   other_notes: string | null
 }
@@ -43,6 +44,14 @@ function normalizeHeader(value: string) {
 
 function isCoffeeChat(value: string) {
   return new Set(['true', 'yes', 'y', '1', 'coffee chat']).has(normalizeHeader(value))
+}
+
+function parseRecommendation(value: string): boolean | null | undefined {
+  const normalized = normalizeHeader(value)
+  if (!normalized) return null
+  if (new Set(['true', 'yes', 'y', '1', 'recommend']).has(normalized)) return true
+  if (new Set(['false', 'no', 'n', '0', 'do not recommend']).has(normalized)) return false
+  return undefined
 }
 
 function parseDateOnly(value: string): string | null | undefined {
@@ -100,6 +109,9 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
   const applicantIndex = headers.indexOf('applicant')
   const notesIndex = headers.findIndex(header => header === 'notes' || header.startsWith('notes ('))
   const coffeeIndex = headers.indexOf('was this a coffee chat?')
+  const recommendationIndex = headers.findIndex(header => (
+    header === 'recommend overall?' || header === 'recommend applicant?'
+  ))
   const dateIndex = headers.indexOf('date')
   const otherNotesIndex = headers.indexOf('other notes')
 
@@ -149,6 +161,17 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
       continue
     }
 
+    const rawRecommendation = recommendationIndex >= 0 ? (row[recommendationIndex] ?? '') : ''
+    const recommendedOverall = parseRecommendation(rawRecommendation)
+    if (recommendedOverall === undefined) {
+      issues.push({
+        row: sourceRow,
+        applicant_name: applicantName,
+        reason: `Recommend Overall? value "${rawRecommendation.trim()}" must be TRUE, FALSE, or blank.`,
+      })
+      continue
+    }
+
     const applicant = matches[0]
     matchedRows.push({
       source_row: sourceRow,
@@ -156,6 +179,7 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
       applicant_name: `${applicant.first_name} ${applicant.last_name}`.trim(),
       chatter_name: chatterName.slice(0, 200),
       notes: (row[notesIndex] ?? '').trim().slice(0, 10_000),
+      recommended_overall: recommendedOverall,
       chat_date: chatDate,
       other_notes: otherNotesIndex >= 0 ? ((row[otherNotesIndex] ?? '').trim().slice(0, 5_000) || null) : null,
     })

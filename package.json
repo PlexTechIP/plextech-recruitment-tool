@@ -15,6 +15,7 @@
     "test:assignments": "node scripts/grader-assignment-unit.mjs",
     "test:grader-stats": "node scripts/grader-stats-unit.mjs",
     "test:scoring": "node scripts/scoring-unit.mjs",
+    "test:coffee-chats": "node scripts/coffee-chat-unit.mjs",
     "test:indexes": "node scripts/verify-indexes.mjs",
     "db:security:preflight": "node scripts/migrate-security-indexes.mjs",
     "db:security:apply": "node scripts/migrate-security-indexes.mjs --apply",

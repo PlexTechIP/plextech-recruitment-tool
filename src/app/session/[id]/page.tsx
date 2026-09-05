@@ -688,6 +688,11 @@ function CandidateDetail({
                       </span>
                     )}
                   </div>
+                  {chat.recommended_overall !== null && (
+                    <p className={`mb-2 text-xs font-semibold ${chat.recommended_overall ? 'text-green-500' : 'text-orange-500'}`}>
+                      Recommended overall: {chat.recommended_overall ? 'Yes' : 'No'}
+                    </p>
+                  )}
                   {chat.notes && (
                     <p className="text-sm leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap break-words">
                       {chat.notes}
