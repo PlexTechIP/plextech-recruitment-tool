@@ -13,13 +13,6 @@ const DEV_WEIGHTS: Record<Quality, number> = {
   r6: 0.070588, r7: 0.10588, r8: 0.070588, r9: 0.070588, r0: 0.05,
 }
 
-// Earlier class years get a bigger bonus. Legacy grad-year keys kept for
-// applicants stored before the switch to class-year labels.
-const YEAR_BONUS: Record<string, number> = {
-  'Freshman': 0.03, 'Sophomore': 0.02, 'Junior': 0.01, 'Senior': 0,
-  '2025': 0, '2026': 0.01, '2027': 0.02, '2028': 0.03,
-}
-
 function mean(arr: number[]): number {
   return arr.reduce((a, b) => a + b, 0) / arr.length
 }
@@ -107,7 +100,6 @@ export function evaluateResults(
       total += isNaN(contribution) ? 0.02 : contribution
     }
 
-    total += YEAR_BONUS[applicant.year ?? ''] ?? 0
     total = Math.round(total * 100 * 100) / 100
 
     results.push({
