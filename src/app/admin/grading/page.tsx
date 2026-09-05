@@ -47,13 +47,41 @@ interface ApplicantRow {
   first_name: string
   last_name: string
   desired_roles: string | null
+  r0: number
+  r1: number
+  r2: number
+  r3: number
+  r4: number
+  r5: number
+  r6: number
+  r7: number
+  r8: number
+  r9: number
   total: number
   review_count: number
   assigned_count: number
   reviews: { grader_email: string; r0: number; r1: number; r2: number; r3: number; r4: number; r5: number; r6: number; r7: number; r8: number; r9: number }[]
 }
 
-type SortKey = 'total' | 'name' | 'reviews'
+type RatingKey = 'r0' | 'r1' | 'r2' | 'r3' | 'r4' | 'r5' | 'r6' | 'r7' | 'r8' | 'r9'
+type ApplicantSortKey = 'total' | 'name' | 'reviews' | RatingKey
+type GraderSortKey = 'email' | 'completed' | 'assigned' | 'average_rating' | 'rating_stddev' | 'progress'
+
+const APPLICANT_SORT_OPTIONS: { value: ApplicantSortKey; label: string }[] = [
+  { value: 'total', label: 'Overall score' },
+  { value: 'name', label: 'Applicant name' },
+  { value: 'reviews', label: 'Reviews completed' },
+  { value: 'r0', label: 'R0 — Time commitments concern' },
+  { value: 'r1', label: 'R1 — Resume thoughtfulness' },
+  { value: 'r2', label: 'R2 — Technical depth' },
+  { value: 'r3', label: 'R3 — Passion (resume)' },
+  { value: 'r4', label: 'R4 — Passion for club' },
+  { value: 'r5', label: 'R5 — Club knowledge' },
+  { value: 'r6', label: 'R6 — Creativity' },
+  { value: 'r7', label: 'R7 — Eagerness to learn' },
+  { value: 'r8', label: 'R8 — Leadership' },
+  { value: 'r9', label: 'R9 — Commitment to community' },
+]
 
 function SortIcon({ active, direction }: { active: boolean; direction: 'asc' | 'desc' }) {
   return active ? <span className="ml-1">{direction === 'desc' ? '↓' : '↑'}</span> : null
@@ -70,8 +98,10 @@ export default function GradingConsolePage() {
   const [applicants, setApplicants] = useState<ApplicantRow[]>([])
   const [loading, setLoading] = useState(false)
   const [expandedApplicant, setExpandedApplicant] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>('total')
+  const [sortKey, setSortKey] = useState<ApplicantSortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [graderSortKey, setGraderSortKey] = useState<GraderSortKey>('completed')
+  const [graderSortDir, setGraderSortDir] = useState<'asc' | 'desc'>('desc')
   const [reassignTarget, setReassignTarget] = useState<GraderStat | null>(null)
   const [reassignCount, setReassignCount] = useState(5)
   const [reassignSourceEmail, setReassignSourceEmail] = useState('')
@@ -126,9 +156,14 @@ export default function GradingConsolePage() {
     })
   }, [authed, selectCycle])
 
-  function toggleSort(key: SortKey) {
+  function toggleSort(key: ApplicantSortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortKey(key); setSortDir('desc') }
+  }
+
+  function toggleGraderSort(key: GraderSortKey) {
+    if (graderSortKey === key) setGraderSortDir(direction => direction === 'asc' ? 'desc' : 'asc')
+    else { setGraderSortKey(key); setGraderSortDir(key === 'email' ? 'asc' : 'desc') }
   }
 
   function openReassignment(grader: GraderStat) {
@@ -213,12 +248,36 @@ export default function GradingConsolePage() {
   }
 
   const sortedApplicants = [...applicants].sort((a, b) => {
+    if (a.review_count === 0 && b.review_count > 0) return 1
+    if (b.review_count === 0 && a.review_count > 0) return -1
     let diff = 0
     if (sortKey === 'total') diff = a.total - b.total
     else if (sortKey === 'name') diff = `${a.last_name}${a.first_name}`.localeCompare(`${b.last_name}${b.first_name}`)
     else if (sortKey === 'reviews') diff = a.review_count - b.review_count
+    else diff = a[sortKey] - b[sortKey]
+    if (diff === 0) diff = `${a.last_name}${a.first_name}`.localeCompare(`${b.last_name}${b.first_name}`)
     return sortDir === 'asc' ? diff : -diff
   })
+
+  const sortedGraders = [...graders].sort((a, b) => {
+    const aProgress = a.assigned > 0 ? a.completed / a.assigned : 0
+    const bProgress = b.assigned > 0 ? b.completed / b.assigned : 0
+    let diff = 0
+    if (graderSortKey === 'email') diff = a.email.localeCompare(b.email)
+    else if (graderSortKey === 'progress') diff = aProgress - bProgress
+    else if (graderSortKey === 'average_rating' || graderSortKey === 'rating_stddev') {
+      const aValue = a[graderSortKey]
+      const bValue = b[graderSortKey]
+      if (aValue === null && bValue !== null) return 1
+      if (bValue === null && aValue !== null) return -1
+      diff = (aValue ?? 0) - (bValue ?? 0)
+    } else diff = a[graderSortKey] - b[graderSortKey]
+    if (diff === 0) diff = a.email.localeCompare(b.email)
+    return graderSortDir === 'asc' ? diff : -diff
+  })
+  const selectedRatingKey = sortKey.startsWith('r') && sortKey !== 'reviews'
+    ? sortKey as RatingKey
+    : null
 
   const selectedSourceAvailable = reassignPreview
     ? reassignSourceEmail
@@ -351,27 +410,49 @@ export default function GradingConsolePage() {
                 <table className="w-full text-sm">
                   <thead className="bg-[var(--bg-raised)]">
                     <tr>
-                      <th className="text-left px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Grader</th>
-                      <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Completed</th>
-                      <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Assigned</th>
                       <th
-                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium"
+                        className="text-left px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
+                        onClick={() => toggleGraderSort('email')}
+                      >
+                        Grader <SortIcon active={graderSortKey === 'email'} direction={graderSortDir} />
+                      </th>
+                      <th
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
+                        onClick={() => toggleGraderSort('completed')}
+                      >
+                        Completed <SortIcon active={graderSortKey === 'completed'} direction={graderSortDir} />
+                      </th>
+                      <th
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
+                        onClick={() => toggleGraderSort('assigned')}
+                      >
+                        Assigned <SortIcon active={graderSortKey === 'assigned'} direction={graderSortDir} />
+                      </th>
+                      <th
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
                         title="Average across all submitted 1–4 rubric ratings (R1–R9). Lower generally means stricter grading."
+                        onClick={() => toggleGraderSort('average_rating')}
                       >
-                        Avg rating
+                        Avg rating <SortIcon active={graderSortKey === 'average_rating'} direction={graderSortDir} />
                       </th>
                       <th
-                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium"
+                        className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium cursor-pointer hover:text-[var(--text-primary)] select-none"
                         title="Population standard deviation across all submitted 1–4 rubric ratings (R1–R9). Higher means more variable scoring."
+                        onClick={() => toggleGraderSort('rating_stddev')}
                       >
-                        Std dev
+                        Std dev <SortIcon active={graderSortKey === 'rating_stddev'} direction={graderSortDir} />
                       </th>
-                      <th className="px-5 py-2 text-xs text-[var(--text-muted)] font-medium w-40">Progress</th>
+                      <th
+                        className="px-5 py-2 text-xs text-[var(--text-muted)] font-medium w-40 cursor-pointer hover:text-[var(--text-primary)] select-none"
+                        onClick={() => toggleGraderSort('progress')}
+                      >
+                        Progress <SortIcon active={graderSortKey === 'progress'} direction={graderSortDir} />
+                      </th>
                       <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border)]">
-                    {graders.map(g => {
+                    {sortedGraders.map(g => {
                       const pct = g.assigned > 0 ? Math.round((g.completed / g.assigned) * 100) : 0
                       const done = g.completed === g.assigned
                       return (
@@ -419,9 +500,36 @@ export default function GradingConsolePage() {
 
             {/* Applicant Scores */}
             <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-[var(--border)]">
-                <h2 className="font-semibold text-[var(--text-primary)]">Applicant Scores</h2>
-                <p className="text-xs text-[var(--text-muted)] mt-0.5">{applicants.length} applicants — click a row to see per-reviewer ratings</p>
+              <div className="px-5 py-4 border-b border-[var(--border)] flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="font-semibold text-[var(--text-primary)]">Applicant Scores</h2>
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">{applicants.length} applicants — click a row to see per-reviewer ratings</p>
+                </div>
+                <div className="flex items-end gap-2">
+                  <label className="text-xs text-[var(--text-muted)]">
+                    <span className="mb-1 block">Sort by</span>
+                    <select
+                      value={sortKey}
+                      onChange={event => {
+                        setSortKey(event.target.value as ApplicantSortKey)
+                        setSortDir('desc')
+                      }}
+                      className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2 text-xs text-[var(--text-primary)]"
+                    >
+                      {APPLICANT_SORT_OPTIONS.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setSortDir(direction => direction === 'asc' ? 'desc' : 'asc')}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-active)]"
+                    aria-label={`Sort ${sortDir === 'desc' ? 'ascending' : 'descending'}`}
+                  >
+                    {sortDir === 'desc' ? 'Highest first ↓' : 'Lowest first ↑'}
+                  </button>
+                </div>
               </div>
               {applicants.length === 0 ? (
                 <p className="px-5 py-4 text-sm text-[var(--text-muted)]">No applicants assigned yet.</p>
@@ -448,6 +556,11 @@ export default function GradingConsolePage() {
                       >
                         Score <SortIcon active={sortKey === 'total'} direction={sortDir} />
                       </th>
+                      {selectedRatingKey && (
+                        <th className="text-right px-5 py-2 text-xs text-[var(--text-muted)] font-medium uppercase">
+                          {selectedRatingKey} value <SortIcon active direction={sortDir} />
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border)]">
@@ -475,10 +588,15 @@ export default function GradingConsolePage() {
                                 <span className="text-[var(--text-muted)]">—</span>
                               )}
                             </td>
+                            {selectedRatingKey && (
+                              <td className="px-5 py-3 text-right font-mono font-semibold text-[#C026D3]">
+                                {hasScore ? a[selectedRatingKey].toFixed(2) : '—'}
+                              </td>
+                            )}
                           </tr>
                           {expanded && (
                             <tr className="bg-[var(--bg-raised)]">
-                              <td colSpan={4} className="px-5 py-4">
+                              <td colSpan={selectedRatingKey ? 5 : 4} className="px-5 py-4">
                                 {a.reviews.length === 0 ? (
                                   <p className="text-xs text-[var(--text-muted)]">No reviews submitted yet.</p>
                                 ) : (
