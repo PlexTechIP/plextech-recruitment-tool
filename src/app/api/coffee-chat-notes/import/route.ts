@@ -119,6 +119,7 @@ export async function POST(req: NextRequest) {
           applicant_name: row.applicant_name,
           chatter_name: row.chatter_name,
           notes: row.notes,
+          recommended_overall: row.recommended_overall,
           chat_date: row.chat_date,
           other_notes: row.other_notes,
           imported_by: auth.email,

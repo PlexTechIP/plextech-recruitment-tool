@@ -65,6 +65,7 @@ export interface CoffeeChatNote {
   applicant_name: string
   chatter_name: string
   notes: string
+  recommended_overall: boolean | null
   chat_date: string | null
   other_notes: string | null
   imported_by: string
