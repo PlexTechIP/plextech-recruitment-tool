@@ -71,6 +71,10 @@ async function main() {
     join(process.cwd(), 'src/app/api/applicants/[id]/resume/route.ts'),
     'utf8',
   )
+  const voteResetRouteSource = await readFile(
+    join(process.cwd(), 'src/app/api/votes/reset/route.ts'),
+    'utf8',
+  )
 
   try {
     const valid = await readJsonObject(jsonRequest({ name: 'PlexTech', nested: { ok: true } }))
@@ -171,6 +175,21 @@ async function main() {
       resumeRouteSource,
       /Content-Disposition': 'inline; filename="resume\.pdf"'/,
       'inline resume responses must use a fixed safe filename',
+    )
+    assert.match(
+      voteResetRouteSource,
+      /if \(auth\.role !== 'admin'\) sessionFilter\.created_by = auth\.email/,
+      'vote resets must remain limited to admins or the session creator',
+    )
+    assert.match(
+      voteResetRouteSource,
+      /vote_type: mongoose\.trusted\(\{ \$in: \['vouch', 'anti_vouch'\] \}\)/,
+      'vote resets must preserve red flags',
+    )
+    assert.match(
+      voteResetRouteSource,
+      /mongoose\.connection\.transaction/,
+      'vote resets must remain transactional',
     )
 
     const validPdf = await PDFDocument.create({ updateMetadata: false })
