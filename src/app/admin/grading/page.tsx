@@ -230,6 +230,14 @@ export default function GradingConsolePage() {
     && reassignPreview.count === reassignCount
     && (reassignPreview.selected_source_grader_email ?? '') === reassignSourceEmail,
   )
+  const fullyGradedApplications = applicants.filter(applicant => (
+    applicant.assigned_count > 0 && applicant.review_count >= applicant.assigned_count
+  )).length
+  const submittedReviews = applicants.reduce((total, applicant) => total + applicant.review_count, 0)
+  const assignedReviews = applicants.reduce((total, applicant) => total + applicant.assigned_count, 0)
+  const overallProgress = applicants.length > 0
+    ? Math.round((fullyGradedApplications / applicants.length) * 100)
+    : 0
 
   if (!authed) return null
 
@@ -295,6 +303,39 @@ export default function GradingConsolePage() {
           <p className="text-[var(--text-muted)] text-sm">Select a round to view grading stats.</p>
         ) : (
           <>
+            {/* Overall Progress */}
+            <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-5">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="font-semibold text-[var(--text-primary)]">Overall Grading Progress</h2>
+                  <p className="mt-2 text-2xl font-semibold text-[var(--text-primary)]">
+                    {fullyGradedApplications} / {applicants.length}
+                  </p>
+                  <p className="text-sm text-[var(--text-muted)]">applications fully graded</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium text-[var(--text-secondary)]">
+                    {submittedReviews} / {assignedReviews} reviews submitted
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    An application is complete after all assigned reviewers submit.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-[var(--border)]">
+                <div
+                  role="progressbar"
+                  aria-label="Applications fully graded"
+                  aria-valuemin={0}
+                  aria-valuemax={applicants.length}
+                  aria-valuenow={fullyGradedApplications}
+                  className="h-full rounded-full bg-gradient-to-r from-[#FF6B35] to-[#C026D3] transition-all"
+                  style={{ width: `${overallProgress}%` }}
+                />
+              </div>
+              <p className="mt-2 text-right text-xs font-medium text-[var(--text-muted)]">{overallProgress}% complete</p>
+            </div>
+
             {/* Grader Progress */}
             <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-[var(--border)]">
