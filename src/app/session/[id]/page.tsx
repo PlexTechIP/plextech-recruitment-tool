@@ -35,6 +35,55 @@ type ApplicantInfo = {
   has_resume: boolean
 }
 
+type GenderCategory = 'male' | 'female' | 'other' | 'unknown'
+
+const GENDER_BADGE: Record<GenderCategory, { label: string; shortLabel: string; className: string }> = {
+  male: { label: 'Male', shortLabel: 'M', className: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-600' },
+  female: { label: 'Female', shortLabel: 'F', className: 'border-pink-500/30 bg-pink-500/10 text-pink-600' },
+  other: { label: 'Other gender', shortLabel: 'Other', className: 'border-purple-500/30 bg-purple-500/10 text-purple-600' },
+  unknown: { label: 'Gender not provided', shortLabel: '—', className: 'border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)]' },
+}
+
+function categorizeGender(value: unknown): GenderCategory {
+  if (typeof value !== 'string') return 'unknown'
+  const normalized = value.trim().toLowerCase()
+  if (['male', 'man', 'm'].includes(normalized)) return 'male'
+  if (['female', 'woman', 'f'].includes(normalized)) return 'female'
+  return normalized ? 'other' : 'unknown'
+}
+
+function GenderBadge({ gender }: { gender: unknown }) {
+  const badge = GENDER_BADGE[categorizeGender(gender)]
+  return (
+    <span
+      title={badge.label}
+      aria-label={badge.label}
+      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold leading-none ${badge.className}`}
+    >
+      {badge.shortLabel}
+    </span>
+  )
+}
+
+function GenderRatio({ candidates }: { candidates: Candidate[] }) {
+  const counts = candidates.reduce<Record<GenderCategory, number>>((totals, candidate) => {
+    totals[categorizeGender(candidate.data?.gender)] += 1
+    return totals
+  }, { male: 0, female: 0, other: 0, unknown: 0 })
+  const total = candidates.length
+  const percentage = (count: number) => total > 0 ? `${((count / total) * 100).toFixed(1)}%` : '0.0%'
+
+  return (
+    <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs">
+      <span className="font-semibold text-[var(--text-primary)]">Gender ratio</span>
+      <span className="text-cyan-600">Male <strong>{counts.male}</strong> ({percentage(counts.male)})</span>
+      <span className="text-pink-600">Female <strong>{counts.female}</strong> ({percentage(counts.female)})</span>
+      {counts.other > 0 && <span className="text-purple-600">Other <strong>{counts.other}</strong> ({percentage(counts.other)})</span>}
+      {counts.unknown > 0 && <span className="text-[var(--text-muted)]">Not provided <strong>{counts.unknown}</strong> ({percentage(counts.unknown)})</span>}
+    </div>
+  )
+}
+
 function safeExternalUrl(value: string | null | undefined) {
   if (!value) return null
   try {
@@ -434,6 +483,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         </div>
       )}
 
+      <GenderRatio candidates={candidates} />
+
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
       {viewMode === 'list' ? (
@@ -528,6 +579,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                       <div className="flex items-center gap-2">
                         <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`} />
                         <span className="text-sm text-[var(--text-primary)] font-medium truncate flex-1">{c.name}</span>
+                        <GenderBadge gender={c.data?.gender} />
                       </div>
                       <div className="flex items-center gap-2 mt-1 ml-4">
                         {c.data.score != null && (
@@ -675,6 +727,7 @@ function ListView({
                     <div className="flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[c.status]}`} />
                       <span className="font-medium text-[var(--text-primary)]">{c.name}</span>
+                      <GenderBadge gender={c.data?.gender} />
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -814,7 +867,10 @@ function CandidateDetail({
     <div className="p-6 max-w-2xl">
       {/* Name + status */}
       <div className="flex items-start justify-between gap-4 mb-6">
-        <h2 className="text-2xl font-bold text-[var(--text-primary)]">{candidate.name}</h2>
+        <div className="flex min-w-0 items-center gap-2">
+          <h2 className="truncate text-2xl font-bold text-[var(--text-primary)]">{candidate.name}</h2>
+          <GenderBadge gender={candidate.data?.gender} />
+        </div>
         <span className={`shrink-0 text-xs px-2.5 py-1 rounded-full font-medium border ${STATUS_BADGE[candidate.status]}`}>
           {candidate.status}
         </span>

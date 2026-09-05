@@ -32,10 +32,26 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Join this session to view candidates.' }, { status: 403 })
   }
   const candidates = await Candidate.find({ session_id: id }).sort({ created_at: 1 }).lean()
+  const applicantIds = candidates
+    .map(candidate => candidate.applicant_id)
+    .filter((applicantId): applicantId is mongoose.Types.ObjectId => applicantId instanceof mongoose.Types.ObjectId)
+  const applicants = applicantIds.length > 0
+    ? await Applicant.find({ _id: mongoose.trusted({ $in: applicantIds }) }).select('_id gender').lean()
+    : []
+  const genderByApplicantId = new Map(
+    applicants.map(applicant => [applicant._id.toString(), applicant.gender ?? null]),
+  )
+
   return NextResponse.json(candidates.map(c => ({
     ...c,
     id: c._id.toString(),
     applicant_id: c.applicant_id?.toString() ?? null,
+    data: {
+      ...(isPlainRecord(c.data) ? c.data : {}),
+      gender: c.applicant_id
+        ? genderByApplicantId.get(c.applicant_id.toString()) ?? null
+        : isPlainRecord(c.data) ? c.data.gender ?? null : null,
+    },
     _id: undefined,
   })))
 }

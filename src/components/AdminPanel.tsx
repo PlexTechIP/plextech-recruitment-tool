@@ -16,6 +16,8 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
   const [importStatus, setImportStatus] = useState('')
   const [ending, setEnding] = useState(false)
   const [togglingAnon, setTogglingAnon] = useState(false)
+  const [resettingVouches, setResettingVouches] = useState(false)
+  const [resetVouchesStatus, setResetVouchesStatus] = useState('')
   const [csvText, setCsvText] = useState('')
   const [showPaste, setShowPaste] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -300,6 +302,31 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
     setImportStatus('All candidates cleared.')
   }
 
+  async function handleResetVouches() {
+    if (!confirm('Reset all vouches and anti-vouches in this session? Red flags will remain. This cannot be undone.')) return
+    setResettingVouches(true)
+    setResetVouchesStatus('')
+    try {
+      const response = await fetch('/api/votes/reset', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setResetVouchesStatus(body?.error ?? 'Unable to reset vouches.')
+        return
+      }
+      const deletedCount = Number(body?.deleted_count ?? 0)
+      setResetVouchesStatus(`Reset ${deletedCount} vouch${deletedCount === 1 ? '' : 'es'} and anti-vouches. Red flags were kept.`)
+      await onRefresh()
+    } catch {
+      setResetVouchesStatus('Unable to reset vouches. Check your connection and try again.')
+    } finally {
+      setResettingVouches(false)
+    }
+  }
+
   return (
     <div className="flex flex-col border-b border-[var(--border)]">
         {/* Tab bar */}
@@ -398,6 +425,22 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
               </div>
 
               {/* Clear */}
+              <div className="space-y-2">
+                <button
+                  onClick={handleResetVouches}
+                  disabled={resettingVouches || session.status === 'ended'}
+                  className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-orange-500/10 text-orange-500 border border-orange-500/30 hover:bg-orange-500/20 transition-colors disabled:opacity-40"
+                >
+                  {resettingVouches ? 'Resetting…' : 'Reset Vouches'}
+                </button>
+                <p className="text-xs text-[var(--text-muted)]">Clears all vouches and anti-vouches. Red flags remain.</p>
+                {resetVouchesStatus && (
+                  <p className={`text-xs ${resetVouchesStatus.startsWith('Reset ') ? 'text-green-500' : 'text-red-400'}`}>
+                    {resetVouchesStatus}
+                  </p>
+                )}
+              </div>
+
               <button
                 onClick={handleClearCandidates}
                 disabled={session.status === 'ended'}
