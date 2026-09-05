@@ -302,17 +302,33 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }
 
   async function handleStatusChange(candidateId: string, status: string) {
-    const res = await fetch(`/api/candidates/${candidateId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(`Could not update status: ${err?.error ?? res.statusText}`)
-      return
+    const nextStatus = status as Candidate['status']
+    const previousStatus = candidates.find(candidate => candidate.id === candidateId)?.status
+    setCandidates(current => current.map(candidate => (
+      candidate.id === candidateId ? { ...candidate, status: nextStatus } : candidate
+    )))
+
+    try {
+      const res = await fetch(`/api/candidates/${candidateId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error ?? res.statusText)
+      }
+      void loadData()
+    } catch (error) {
+      if (previousStatus) {
+        setCandidates(current => current.map(candidate => (
+          candidate.id === candidateId && candidate.status === nextStatus
+            ? { ...candidate, status: previousStatus }
+            : candidate
+        )))
+      }
+      alert(`Could not update status: ${error instanceof Error ? error.message : 'Check your connection and try again.'}`)
     }
-    await loadData()
   }
 
   function toggleCandidateSelection(candidateId: string) {
@@ -335,22 +351,41 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     const label = status.charAt(0).toUpperCase() + status.slice(1)
     if (!confirm(`Set ${candidateIds.length} selected candidate${candidateIds.length === 1 ? '' : 's'} to ${label}?`)) return
 
+    const nextStatus = status as Candidate['status']
+    const selectedIdSet = new Set(candidateIds)
+    const previousStatuses = new Map(
+      candidates
+        .filter(candidate => selectedIdSet.has(candidate.id))
+        .map(candidate => [candidate.id, candidate.status]),
+    )
+
+    setCandidates(current => current.map(candidate => (
+      selectedIdSet.has(candidate.id) ? { ...candidate, status: nextStatus } : candidate
+    )))
     setBulkUpdating(true)
-    const res = await fetch('/api/candidates/bulk-status', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, candidate_ids: candidateIds, status }),
-    })
-    setBulkUpdating(false)
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(`Could not update selected candidates: ${err?.error ?? res.statusText}`)
-      return
+    try {
+      const res = await fetch('/api/candidates/bulk-status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, candidate_ids: candidateIds, status }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error ?? res.statusText)
+      }
+      exitBulkMode()
+      void loadData()
+    } catch (error) {
+      setCandidates(current => current.map(candidate => {
+        const previousStatus = previousStatuses.get(candidate.id)
+        return previousStatus && candidate.status === nextStatus
+          ? { ...candidate, status: previousStatus }
+          : candidate
+      }))
+      alert(`Could not update selected candidates: ${error instanceof Error ? error.message : 'Check your connection and try again.'}`)
+    } finally {
+      setBulkUpdating(false)
     }
-
-    exitBulkMode()
-    await loadData()
   }
 
   async function handleLeaveSession() {
