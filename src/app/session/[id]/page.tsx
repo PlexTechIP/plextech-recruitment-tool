@@ -29,6 +29,8 @@ const STATUS_BTN: Record<string, { active: string; inactive: string }> = {
   pending: { active: 'bg-[var(--bg-active)] text-[var(--text-primary)] border-transparent', inactive: 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]' },
 }
 
+const VOTE_FETCH_BATCH_SIZE = 100
+
 type ApplicantInfo = {
   linkedin: string | null
   website: string | null
@@ -66,21 +68,37 @@ function GenderBadge({ gender }: { gender: unknown }) {
   )
 }
 
-function GenderRatio({ candidates }: { candidates: Candidate[] }) {
-  const counts = candidates.reduce<Record<GenderCategory, number>>((totals, candidate) => {
-    totals[categorizeGender(candidate.data?.gender)] += 1
-    return totals
-  }, { male: 0, female: 0, other: 0, unknown: 0 })
-  const total = candidates.length
+function GenderBreakdown({ counts, total }: { counts: Record<GenderCategory, number>; total: number }) {
   const percentage = (count: number) => total > 0 ? `${((count / total) * 100).toFixed(1)}%` : '0.0%'
-
   return (
-    <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs">
-      <span className="font-semibold text-[var(--text-primary)]">Gender ratio</span>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
       <span className="text-cyan-600">Male <strong>{counts.male}</strong> ({percentage(counts.male)})</span>
       <span className="text-pink-600">Female <strong>{counts.female}</strong> ({percentage(counts.female)})</span>
       {counts.other > 0 && <span className="text-purple-600">Other <strong>{counts.other}</strong> ({percentage(counts.other)})</span>}
       {counts.unknown > 0 && <span className="text-[var(--text-muted)]">Not provided <strong>{counts.unknown}</strong> ({percentage(counts.unknown)})</span>}
+    </div>
+  )
+}
+
+function GenderRatio({ candidates }: { candidates: Candidate[] }) {
+  const summarize = (rows: Candidate[]) => rows.reduce<Record<GenderCategory, number>>((totals, candidate) => {
+    totals[categorizeGender(candidate.data?.gender)] += 1
+    return totals
+  }, { male: 0, female: 0, other: 0, unknown: 0 })
+  const allCounts = summarize(candidates)
+  const acceptedCandidates = candidates.filter(candidate => candidate.status === 'accepted')
+  const acceptedCounts = summarize(acceptedCandidates)
+
+  return (
+    <div className="shrink-0 space-y-1.5 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="w-36 shrink-0 font-semibold text-[var(--text-primary)]">All applicants ({candidates.length})</span>
+        <GenderBreakdown counts={allCounts} total={candidates.length} />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="w-36 shrink-0 font-semibold text-green-600">Greened / Accepted ({acceptedCandidates.length})</span>
+        <GenderBreakdown counts={acceptedCounts} total={acceptedCandidates.length} />
+      </div>
     </div>
   )
 }
@@ -178,10 +196,20 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
 
     if (cands.length > 0) {
-      const ids = cands.map((c: Candidate) => c.id).join(',')
-      const votesRes = await fetch(`/api/votes?candidate_ids=${ids}`)
-      const votesData = votesRes.ok ? await votesRes.json() : []
-      setVotes(votesData)
+      const candidateIds = cands.map((c: Candidate) => c.id)
+      const voteResponses = await Promise.all(
+        Array.from(
+          { length: Math.ceil(candidateIds.length / VOTE_FETCH_BATCH_SIZE) },
+          (_, index) => candidateIds.slice(
+            index * VOTE_FETCH_BATCH_SIZE,
+            (index + 1) * VOTE_FETCH_BATCH_SIZE,
+          ),
+        ).map(ids => fetch(`/api/votes?candidate_ids=${ids.join(',')}`)),
+      )
+      if (voteResponses.every(response => response.ok)) {
+        const voteBatches = await Promise.all(voteResponses.map(response => response.json()))
+        setVotes(voteBatches.flat())
+      }
     } else {
       setVotes([])
     }
