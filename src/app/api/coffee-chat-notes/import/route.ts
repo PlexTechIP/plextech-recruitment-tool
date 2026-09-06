@@ -63,9 +63,9 @@ export async function POST(req: NextRequest) {
       first_name: applicant.first_name,
       last_name: applicant.last_name,
     })))
-    if (preview.coffee_chat_rows === 0) {
+    if (preview.matched_rows.length === 0) {
       return NextResponse.json(
-        { error: 'The CSV contains no rows marked as coffee chats.', preview },
+        { error: 'The CSV contains no matched coffee-chat or interaction notes.', preview },
         { status: 422 },
       )
     }
@@ -100,8 +100,8 @@ export async function POST(req: NextRequest) {
         first_name: applicant.first_name,
         last_name: applicant.last_name,
       })))
-      if (preview.coffee_chat_rows === 0) {
-        throw new CoffeeChatImportRejected('The CSV contains no rows marked as coffee chats.', 422, preview)
+      if (preview.matched_rows.length === 0) {
+        throw new CoffeeChatImportRejected('The CSV contains no matched coffee-chat or interaction notes.', 422, preview)
       }
       if (preview.issues.length > 0) {
         throw new CoffeeChatImportRejected(
@@ -119,6 +119,7 @@ export async function POST(req: NextRequest) {
           applicant_name: row.applicant_name,
           chatter_name: row.chatter_name,
           notes: row.notes,
+          is_coffee_chat: row.is_coffee_chat,
           recommended_overall: row.recommended_overall,
           chat_date: row.chat_date,
           other_notes: row.other_notes,

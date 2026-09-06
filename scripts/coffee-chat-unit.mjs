@@ -32,12 +32,21 @@ try {
     'PlexTech Member,Applicant,Notes,Was this a Coffee Chat?,Recommend Overall?,Date,Other notes',
     'Member One,Ada Lovelace,Strong conversation,TRUE,TRUE,09/01/2026,Follow up',
     'Member Two,Grace Hopper,Not a fit,TRUE,FALSE,09/02/2026,',
+    'Member Three,Ada Lovelace,Helpful non-coffee context,FALSE,,09/03/2026,Met at an event',
+    'Member Four,Unknown Person,Unmatched non-coffee context,FALSE,,09/04/2026,',
+    'Member Five,Unknown Person,,FALSE,,09/05/2026,',
   ].join('\n')
 
   const preview = parseAndMatchCoffeeChatCsv(csv, applicants)
   assert.equal(preview.issues.length, 0)
+  assert.equal(preview.warnings.length, 1)
+  assert.match(preview.warnings[0].reason, /No applicant/)
+  assert.equal(preview.coffee_chat_rows, 2)
+  assert.equal(preview.other_note_rows, 2)
+  assert.equal(preview.matched_rows.length, 3)
   assert.equal(preview.matched_rows[0].recommended_overall, true)
   assert.equal(preview.matched_rows[1].recommended_overall, false)
+  assert.equal(preview.matched_rows[2].is_coffee_chat, false)
 
   const invalid = parseAndMatchCoffeeChatCsv(csv.replace(',TRUE,09/01/2026', ',MAYBE,09/01/2026'), applicants)
   assert.equal(invalid.issues.length, 1)

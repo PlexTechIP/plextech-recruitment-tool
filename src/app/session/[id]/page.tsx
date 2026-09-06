@@ -942,6 +942,7 @@ function CandidateDetail({
 
       {/* Dynamic fields from data JSON */}
       <DataFields data={candidate.data} />
+      <InterviewDetails value={candidate.data?.interview} />
 
       {candidate.applicant_id && applicantInfo && (
         <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
@@ -1075,14 +1076,21 @@ function CandidateDetail({
               {coffeeChats.map(chat => (
                 <div key={chat.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
                   <div className="flex items-center justify-between gap-3 mb-2">
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">{chat.chatter_name}</p>
-                    {chat.chat_date && (
-                      <span className="text-xs text-[var(--text-muted)] shrink-0">
-                        {new Date(`${chat.chat_date}T00:00:00`).toLocaleDateString('en-US', {
-                          month: 'short', day: 'numeric', year: 'numeric',
-                        })}
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-[var(--text-primary)]">{chat.chatter_name}</p>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                        chat.is_coffee_chat === false
+                          ? 'border-[var(--border)] bg-[var(--bg-surface)] text-[var(--text-muted)]'
+                          : 'border-[#FF6B35]/30 bg-[#FF6B35]/10 text-[#FF6B35]'
+                      }`}>
+                        {chat.is_coffee_chat === false ? 'Not marked as coffee chat' : 'Coffee chat'}
                       </span>
-                    )}
+                    </div>
+                    {chat.chat_date && <span className="text-xs text-[var(--text-muted)] shrink-0">
+                      {new Date(`${chat.chat_date}T00:00:00`).toLocaleDateString('en-US', {
+                        month: 'short', day: 'numeric', year: 'numeric',
+                      })}
+                    </span>}
                   </div>
                   {chat.recommended_overall !== null && (
                     <p className={`mb-2 text-xs font-semibold ${chat.recommended_overall ? 'text-green-500' : 'text-orange-500'}`}>
@@ -1384,8 +1392,104 @@ function GraderComments({ reviews }: { reviews?: GraderReview[] }) {
   )
 }
 
+type InterviewData = {
+  format: 'developer_fa26' | 'curriculum_fa26'
+  interviewers: string[]
+  criterion_averages: { key: string; label: string; value: number }[]
+  overall_score: number | null
+  records: {
+    source_row: number
+    interviewer: string
+    scores: { key: string; label: string; value: number; raw: string }[]
+    responses: { label: string; value: string }[]
+  }[]
+}
+
+function isInterviewData(value: unknown): value is InterviewData {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (record.format === 'developer_fa26' || record.format === 'curriculum_fa26')
+    && Array.isArray(record.interviewers)
+    && Array.isArray(record.criterion_averages)
+    && Array.isArray(record.records)
+}
+
+function InterviewDetails({ value }: { value: unknown }) {
+  if (!isInterviewData(value)) return null
+  const scoreSuffix = value.format === 'developer_fa26' ? ' / 7' : ' / 19'
+  return (
+    <div className="mb-6 overflow-hidden rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5">
+      <div className="space-y-3 px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Interview results</p>
+            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+              <span className="font-medium text-[var(--text-primary)]">Interviewers:</span>{' '}
+              {value.interviewers.join(', ') || 'Not listed'}
+            </p>
+          </div>
+          <div className="rounded-lg border border-[#FF6B35]/25 bg-[var(--bg-raised)] px-3 py-2 text-right">
+            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Overall score</p>
+            <p className="font-mono text-lg font-semibold text-[#FF6B35]">
+              {value.overall_score ?? '—'}{value.overall_score === null ? '' : scoreSuffix}
+            </p>
+          </div>
+        </div>
+        {value.criterion_averages.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {value.criterion_averages.map(score => (
+              <div key={score.key} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-2.5">
+                <p className="truncate text-[10px] text-[var(--text-muted)]" title={score.label}>{score.label}</p>
+                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <details className="border-t border-[#FF6B35]/20">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-[#FF6B35]">
+          View interviewer responses and comments ({value.records.length})
+        </summary>
+        <div className="space-y-3 px-4 pb-4">
+          {value.records.map(record => (
+            <div key={`${record.source_row}-${record.interviewer}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
+              <div className="mb-3">
+                <p className="text-sm font-semibold text-[var(--text-primary)]">{record.interviewer}</p>
+              </div>
+              {record.scores.length > 0 && (
+                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {record.scores.map(score => (
+                    <div key={score.key} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-2">
+                      <p className="text-[10px] text-[var(--text-muted)]">{score.label}</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">{score.raw}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {record.responses.length > 0 && (
+                <div className="space-y-2">
+                  {record.responses.map((response, index) => (
+                    <details key={`${response.label}-${index}`} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)]">
+                      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-[var(--text-secondary)]">{response.label}</summary>
+                      <p className="whitespace-pre-wrap break-words px-3 pb-3 text-sm text-[var(--text-primary)]">{response.value}</p>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  )
+}
+
 function DataFields({ data }: { data: Record<string, unknown> }) {
-  const entries = Object.entries(data).filter(([k, v]) => v !== null && v !== undefined && v !== '' && !RUBRIC_KEYS.has(k))
+  const hasInterview = isInterviewData(data.interview)
+  const entries = Object.entries(data).filter(([k, v]) =>
+    v !== null && v !== undefined && v !== '' && !RUBRIC_KEYS.has(k)
+    && k !== 'interview' && k !== 'candidate_number' && !(hasInterview && k === 'score'),
+  )
 
   const urls = entries.filter(([, v]) => typeof v === 'string' && isUrl(v as string))
   const nonUrl = entries.filter(([, v]) => !(typeof v === 'string' && isUrl(v as string)))
