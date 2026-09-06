@@ -15,6 +15,7 @@ export type MatchedCoffeeChatRow = {
   applicant_name: string
   chatter_name: string
   notes: string
+  is_coffee_chat: boolean
   recommended_overall: boolean | null
   chat_date: string | null
   other_notes: string | null
@@ -30,8 +31,10 @@ export type CoffeeChatImportPreview = {
   header_row: number
   source_rows: number
   coffee_chat_rows: number
+  other_note_rows: number
   matched_rows: MatchedCoffeeChatRow[]
   issues: CoffeeChatImportIssue[]
+  warnings: CoffeeChatImportIssue[]
 }
 
 export function normalizePersonName(value: string) {
@@ -125,46 +128,54 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
   const nonEmptyRows = dataRows.filter(row => row.some(cell => cell.trim()))
   const matchedRows: MatchedCoffeeChatRow[] = []
   const issues: CoffeeChatImportIssue[] = []
+  const warnings: CoffeeChatImportIssue[] = []
   let coffeeChatRows = 0
+  let otherNoteRows = 0
 
   for (let offset = 0; offset < dataRows.length; offset++) {
     const row = dataRows[offset]
-    if (!row.some(cell => cell.trim()) || !isCoffeeChat(row[coffeeIndex] ?? '')) continue
-    coffeeChatRows++
+    if (!row.some(cell => cell.trim())) continue
+    const markedCoffeeChat = isCoffeeChat(row[coffeeIndex] ?? '')
+    const notes = (row[notesIndex] ?? '').trim()
+    const otherNotes = otherNotesIndex >= 0 ? (row[otherNotesIndex] ?? '').trim() : ''
+    if (!markedCoffeeChat && !notes && !otherNotes) continue
+    if (markedCoffeeChat) coffeeChatRows++
+    else otherNoteRows++
     const sourceRow = headerIndex + offset + 2
     const applicantName = (row[applicantIndex] ?? '').trim()
     const chatterName = (row[memberIndex] ?? '').trim()
+    const issueTarget = markedCoffeeChat ? issues : warnings
 
     if (!applicantName) {
-      issues.push({ row: sourceRow, applicant_name: '', reason: 'Applicant name is missing.' })
+      issueTarget.push({ row: sourceRow, applicant_name: '', reason: 'Applicant name is missing.' })
       continue
     }
     if (!chatterName) {
-      issues.push({ row: sourceRow, applicant_name: applicantName, reason: 'PlexTech member name is missing.' })
+      issueTarget.push({ row: sourceRow, applicant_name: applicantName, reason: 'PlexTech member name is missing.' })
       continue
     }
 
     const matches = applicantsByName.get(normalizePersonName(applicantName)) ?? []
     if (matches.length === 0) {
-      issues.push({ row: sourceRow, applicant_name: applicantName, reason: 'No applicant in this cycle has that exact name.' })
+      issueTarget.push({ row: sourceRow, applicant_name: applicantName, reason: 'No applicant in this cycle has that exact name.' })
       continue
     }
     if (matches.length > 1) {
-      issues.push({ row: sourceRow, applicant_name: applicantName, reason: 'More than one applicant in this cycle has that name.' })
+      issueTarget.push({ row: sourceRow, applicant_name: applicantName, reason: 'More than one applicant in this cycle has that name.' })
       continue
     }
 
     const rawDate = dateIndex >= 0 ? (row[dateIndex] ?? '') : ''
     const chatDate = parseDateOnly(rawDate)
     if (chatDate === undefined) {
-      issues.push({ row: sourceRow, applicant_name: applicantName, reason: `Date "${rawDate.trim()}" must use MM/DD/YYYY or YYYY-MM-DD.` })
+      issueTarget.push({ row: sourceRow, applicant_name: applicantName, reason: `Date "${rawDate.trim()}" must use MM/DD/YYYY or YYYY-MM-DD.` })
       continue
     }
 
     const rawRecommendation = recommendationIndex >= 0 ? (row[recommendationIndex] ?? '') : ''
     const recommendedOverall = parseRecommendation(rawRecommendation)
     if (recommendedOverall === undefined) {
-      issues.push({
+      issueTarget.push({
         row: sourceRow,
         applicant_name: applicantName,
         reason: `Recommend Overall? value "${rawRecommendation.trim()}" must be TRUE, FALSE, or blank.`,
@@ -178,10 +189,11 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
       applicant_id: applicant.id,
       applicant_name: `${applicant.first_name} ${applicant.last_name}`.trim(),
       chatter_name: chatterName.slice(0, 200),
-      notes: (row[notesIndex] ?? '').trim().slice(0, 10_000),
+      notes: notes.slice(0, 10_000),
+      is_coffee_chat: markedCoffeeChat,
       recommended_overall: recommendedOverall,
       chat_date: chatDate,
-      other_notes: otherNotesIndex >= 0 ? ((row[otherNotesIndex] ?? '').trim().slice(0, 5_000) || null) : null,
+      other_notes: otherNotes.slice(0, 5_000) || null,
     })
   }
 
@@ -189,7 +201,9 @@ export function parseAndMatchCoffeeChatCsv(csvText: string, applicants: Applican
     header_row: headerIndex + 1,
     source_rows: nonEmptyRows.length,
     coffee_chat_rows: coffeeChatRows,
+    other_note_rows: otherNoteRows,
     matched_rows: matchedRows,
     issues,
+    warnings,
   }
 }

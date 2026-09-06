@@ -242,6 +242,7 @@ const CoffeeChatNoteSchema = new Schema({
   applicant_name: { type: String, required: true },
   chatter_name:   { type: String, required: true },
   notes:          { type: String, default: '' },
+  is_coffee_chat: { type: Boolean, default: true },
   recommended_overall: { type: Boolean, default: null },
   chat_date:      { type: String, default: null }, // YYYY-MM-DD; date-only avoids timezone shifts
   other_notes:    { type: String, default: null },

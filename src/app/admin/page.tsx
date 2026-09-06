@@ -6,7 +6,6 @@ import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
 import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
 import { buildGraderAssignments } from '@/lib/graderAssignments'
-import Papa from 'papaparse'
 
 // ─── tiny shared UI ──────────────────────────────────────────
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -33,20 +32,35 @@ type CoffeeChatPreview = {
   header_row: number
   source_rows: number
   coffee_chat_rows: number
+  other_note_rows: number
   matched_rows: {
     source_row: number
     applicant_id: string
     applicant_name: string
     chatter_name: string
     notes: string
+    is_coffee_chat: boolean
     chat_date: string | null
     other_notes: string | null
   }[]
   issues: { row: number; applicant_name: string; reason: string }[]
+  warnings: { row: number; applicant_name: string; reason: string }[]
 }
 
-const normalizeName = (value: string) =>
-  value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ')
+type InterviewImportPreview = {
+  format: 'developer_fa26' | 'curriculum_fa26'
+  source_rows: number
+  candidates: {
+    source_name: string
+    interviewers: string[]
+    overall_score: number | null
+    records: number
+    status: 'matched' | 'unresolved' | 'excluded'
+    applicant_id: string | null
+    applicant_name: string | null
+  }[]
+  eligible_applicants: { id: string; name: string }[]
+}
 
 function formatDeadlineInput(deadline: string | null | undefined) {
   if (!deadline) return ''
@@ -110,10 +124,8 @@ export default function AdminPage() {
   // Interview CSV import
   const interviewFileRef = useRef<HTMLInputElement>(null)
   const [interviewCsvText, setInterviewCsvText] = useState<string>('')
-  const [interviewColumns, setInterviewColumns] = useState<string[]>([])
-  const [nameColumn, setNameColumn] = useState<string>('')
-  const [maxRating, setMaxRating] = useState<number>(7)
-  const [interviewPreview, setInterviewPreview] = useState<{ name: string; scores: Record<string, number>; texts: Record<string, string>; avg: number }[] | null>(null)
+  const [interviewPreview, setInterviewPreview] = useState<InterviewImportPreview | null>(null)
+  const [interviewResolutions, setInterviewResolutions] = useState<Record<string, string>>({})
   const [interviewImporting, setInterviewImporting] = useState(false)
   const [interviewMessage, setInterviewMessage] = useState('')
 
@@ -129,6 +141,7 @@ export default function AdminPage() {
     setGradingProgress(null)
     setInterviewFormUrl(round?.interview_form_url ?? '')
     setInterviewPreview(null)
+    setInterviewResolutions({})
     setInterviewCsvText('')
     setInterviewMessage('')
     setRoundSessions([])
@@ -567,168 +580,61 @@ export default function AdminPage() {
   }
 
   // ── interview CSV import ──────────────────────────────────
-  function parseInterviewCsv(text: string) {
-    // Strip UTF-8 BOM that Excel/Sheets exports often include.
-    const clean = text.replace(/^﻿/, '')
-    const result = Papa.parse<Record<string, string>>(clean, { header: true, skipEmptyLines: true, dynamicTyping: false })
-    const rows = result.data
-    if (!rows.length) return
-    const cols = Object.keys(rows[0])
-    setInterviewColumns(cols)
-    // Pick the first column whose name suggests it holds the candidate's name,
-    // preferring "interviewee/applicant/candidate" over a generic "name" match.
-    const pick = cols.find(c => /interviewee|applicant|candidate/i.test(c))
-      ?? cols.find(c => /\bname\b/i.test(c))
-      ?? cols[0]
-    setNameColumn(pick)
-    setInterviewPreview(null)
-  }
-
-  function buildInterviewPreview() {
-    if (!interviewCsvText || !nameColumn) return
-    const result = Papa.parse<Record<string, string>>(interviewCsvText, { header: true, skipEmptyLines: true, dynamicTyping: false })
-    const rows = result.data
-
-    // Identify rating columns: every non-empty cell must parse as a number (rejects text/comment
-    // columns). Out-of-range cells are filtered later, not column-disqualifying — so one stray
-    // "8" on a 1-7 column doesn't drop the whole column.
-    const skipCols = new Set([nameColumn, 'Timestamp', 'Email Address', 'Email', 'email', 'Score', 'Interviewer (member of PlexTech)'])
-    const allCols = rows.length > 0 ? Object.keys(rows[0]) : []
-    const ratingCols = new Set<string>()
-    for (const col of allCols) {
-      if (skipCols.has(col)) continue
-      let hasValue = false
-      let valid = true
-      for (const row of rows) {
-        const raw = (row[col] ?? '').trim()
-        if (!raw) continue
-        const n = parseFloat(raw)
-        // Reject if cell has content but doesn't parse as a number (i.e. it's text).
-        // parseFloat is lenient — "7/10" → 7 — so we also require the string to look numeric.
-        if (isNaN(n) || !/^-?\d+(\.\d+)?$/.test(raw)) { valid = false; break }
-        hasValue = true
-      }
-      if (valid && hasValue) ratingCols.add(col)
-    }
-
-    // Text columns: anything that's not a rating column, not in skipCols, and has at least one
-    // non-empty value across rows. These hold per-interviewer notes/responses.
-    const textCols: string[] = []
-    for (const col of allCols) {
-      if (skipCols.has(col) || ratingCols.has(col)) continue
-      if (rows.some(row => (row[col] ?? '').trim().length > 0)) textCols.push(col)
-    }
-
-    // Auto-detect the "interviewer" column so text entries can be attributed.
-    const interviewerCol = allCols.find(c => /interviewer|grader|reviewer/i.test(c))
-      ?? 'Interviewer (member of PlexTech)'
-
-    type CandidateAgg = {
-      scores: Record<string, number[]>
-      texts: Record<string, { interviewer: string; text: string }[]>
-    }
-    const grouped = new Map<string, CandidateAgg>()
-    for (const row of rows) {
-      const name = (row[nameColumn] ?? '').trim()
-      if (!name) continue
-      if (!grouped.has(name)) grouped.set(name, { scores: {}, texts: {} })
-      const entry = grouped.get(name)!
-      const interviewer = (row[interviewerCol] ?? '').trim() || 'Interviewer'
-
-      for (const col of ratingCols) {
-        const raw = (row[col] ?? '').trim()
-        if (!raw) continue
-        const n = parseFloat(raw)
-        if (isNaN(n) || n < 0 || n > maxRating) continue
-        if (!entry.scores[col]) entry.scores[col] = []
-        entry.scores[col].push(n)
-      }
-
-      for (const col of textCols) {
-        const raw = (row[col] ?? '').trim()
-        if (!raw) continue
-        if (!entry.texts[col]) entry.texts[col] = []
-        entry.texts[col].push({ interviewer, text: raw })
-      }
-    }
-
-    const preview = [...grouped.entries()].map(([name, agg]) => {
-      const avgScores: Record<string, number> = {}
-      let total = 0, count = 0
-      for (const [col, vals] of Object.entries(agg.scores)) {
-        const avg = vals.reduce((a, b) => a + b, 0) / vals.length
-        avgScores[col] = Math.round(avg * 100) / 100
-        total += avg
-        count++
-      }
-      const texts: Record<string, string> = {}
-      for (const [col, vals] of Object.entries(agg.texts)) {
-        const distinct = new Set(vals.map(v => v.interviewer))
-        texts[col] = distinct.size > 1
-          ? vals.map(v => `${v.interviewer}: ${v.text}`).join('\n\n')
-          : vals.map(v => v.text).join('\n\n')
-      }
-      return {
-        name,
-        scores: avgScores,
-        texts,
-        avg: count > 0 ? Math.round((total / count) * 100) / 100 : 0,
-      }
-    }).sort((a, b) => b.avg - a.avg)
-
-    setInterviewPreview(preview)
-  }
-
-  async function importInterviewResponses() {
-    if (!interviewPreview || !selectedCycle || !currentUser || !selectedRound) return
+  async function buildInterviewPreview() {
+    if (!interviewCsvText || !selectedCycle || !selectedRound) return
     setInterviewImporting(true)
     setInterviewMessage('')
     try {
-      const sessionId = Math.random().toString(36).substring(2, 8).toUpperCase()
-      const sessionRes = await fetch('/api/sessions', {
+      const response = await fetch('/api/interview-responses/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: sessionId,
+          action: 'preview',
+          cycle_id: selectedCycle.id,
           round_id: selectedRound.id,
-          name: `${selectedCycle.name} — ${selectedRound.name} Deliberation`,
-          status: 'active',
-          created_by: currentUser.email,
-          anonymous: false,
-          role: selectedRound.role ?? null,
+          csv_text: interviewCsvText,
         }),
       })
-      if (!sessionRes.ok) throw new Error('Failed to create session.')
-      await fetch('/api/session-members', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, user_email: currentUser.email }),
-      })
-      const cycleApplicants: Applicant[] = await fetch(`/api/cycles/${selectedCycle.id}/applicants`).then(r => r.json())
-      const applicantsByName = new Map<string, Applicant[]>()
-      for (const applicant of cycleApplicants) {
-        const key = normalizeName(`${applicant.first_name} ${applicant.last_name}`)
-        applicantsByName.set(key, [...(applicantsByName.get(key) ?? []), applicant])
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data?.error ?? 'Unable to preview interview responses.')
+      setInterviewPreview(data.preview)
+      const initialResolutions: Record<string, string> = {}
+      for (const candidate of data.preview.candidates as InterviewImportPreview['candidates']) {
+        if (candidate.applicant_id) initialResolutions[candidate.source_name] = candidate.applicant_id
       }
+      setInterviewResolutions(initialResolutions)
+    } catch (error: unknown) {
+      setInterviewPreview(null)
+      setInterviewMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setInterviewImporting(false)
+    }
+  }
 
-      const candidates = interviewPreview.map((c, idx) => {
-        const matches = applicantsByName.get(normalizeName(c.name)) ?? []
-        return {
-        session_id: sessionId,
-        applicant_id: matches.length === 1 ? matches[0].id : null,
-        name: c.name,
-        status: 'pending',
-        data: { score: c.avg, candidate_number: idx + 1, ...c.scores, ...c.texts },
-        }
-      })
-      await fetch(`/api/sessions/${sessionId}/candidates`, {
+  async function importInterviewResponses() {
+    if (!interviewPreview || !selectedCycle || !selectedRound) return
+    setInterviewImporting(true)
+    setInterviewMessage('')
+    try {
+      const response = await fetch('/api/interview-responses/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(candidates),
+        body: JSON.stringify({
+          action: 'commit',
+          cycle_id: selectedCycle.id,
+          round_id: selectedRound.id,
+          csv_text: interviewCsvText,
+          resolutions: interviewResolutions,
+        }),
       })
-      await updateRoundStatus(selectedRound, 'deliberating')
-      setInterviewMessage(`Session created! ID: ${sessionId}`)
-      setTimeout(() => router.push(`/session/${sessionId}`), 1500)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        if (data?.preview) setInterviewPreview(data.preview)
+        throw new Error(data?.error ?? 'Unable to import interview responses.')
+      }
+      setInterviewMessage(`Session created! ID: ${data.session_id}`)
+      await loadRounds(selectedCycle.id)
+      setTimeout(() => router.push(`/session/${data.session_id}`), 1200)
     } catch (err: unknown) {
       setInterviewMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`)
     } finally {
@@ -751,7 +657,7 @@ export default function AdminPage() {
       const data = await res.json()
       if (data.preview) setCoffeeChatPreview(data.preview)
       if (!res.ok) throw new Error(data.error ?? 'Could not preview coffee-chat CSV.')
-      setCoffeeChatMessage(`${data.preview.matched_rows.length} coffee chats matched successfully.`)
+      setCoffeeChatMessage(`${data.preview.matched_rows.length} coffee-chat and interaction notes matched successfully.`)
     } catch (error) {
       setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
@@ -780,7 +686,7 @@ export default function AdminPage() {
         if (data.preview) setCoffeeChatPreview(data.preview)
         throw new Error(data.error ?? 'Coffee-chat import failed.')
       }
-      setCoffeeChatMessage(`Imported ${data.imported} coffee chats for ${data.applicants} applicants.`)
+      setCoffeeChatMessage(`Imported ${data.imported} coffee-chat and interaction notes for ${data.applicants} applicants.`)
     } catch (error) {
       setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
@@ -1437,7 +1343,7 @@ export default function AdminPage() {
                     <div className="pt-3 border-t border-[var(--border)] space-y-3">
                       <p className="text-sm font-medium text-[var(--text-primary)]">Import Interview Responses</p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        Export your Google Form responses as CSV, then paste or upload here. Responses are grouped by candidate name and averaged across multiple graders.
+                        Export the FA26 Google Form responses as CSV, then paste or upload them here. Developer and Curriculum scoring formats are detected automatically.
                       </p>
                       <div className="flex gap-2">
                         <button
@@ -1456,67 +1362,80 @@ export default function AdminPage() {
                             if (!file) return
                             const text = await file.text()
                             setInterviewCsvText(text)
-                            parseInterviewCsv(text)
+                            setInterviewPreview(null)
+                            setInterviewResolutions({})
+                            setInterviewMessage('')
                             if (interviewFileRef.current) interviewFileRef.current.value = ''
                           }}
                         />
                       </div>
                       <textarea
                         value={interviewCsvText}
-                        onChange={e => { setInterviewCsvText(e.target.value); parseInterviewCsv(e.target.value) }}
+                        onChange={e => {
+                          setInterviewCsvText(e.target.value)
+                          setInterviewPreview(null)
+                          setInterviewResolutions({})
+                          setInterviewMessage('')
+                        }}
                         placeholder="Or paste CSV here..."
                         rows={4}
                         className="w-full bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[#FF6B35] resize-none"
                       />
 
-                      {interviewColumns.length > 0 && (
-                        <div className="flex gap-2 items-center flex-wrap">
-                          <label className="text-xs text-[var(--text-muted)] shrink-0">Candidate name column:</label>
-                          <select
-                            value={nameColumn}
-                            onChange={e => setNameColumn(e.target.value)}
-                            className="bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
-                          >
-                            {interviewColumns.map(c => <option key={c} value={c}>{c}</option>)}
-                          </select>
-                          <label className="text-xs text-[var(--text-muted)] shrink-0">Max rating:</label>
-                          <input
-                            type="number"
-                            min={1}
-                            value={maxRating}
-                            onChange={e => setMaxRating(Number(e.target.value) || 0)}
-                            className="w-20 bg-[var(--bg-raised)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[#FF6B35]"
-                          />
-                          <button
-                            onClick={buildInterviewPreview}
-                            className="plex-gradient text-white text-sm font-medium px-3 py-1.5 rounded-lg cursor-pointer"
-                          >
-                            Preview
-                          </button>
-                        </div>
+                      <button
+                        onClick={buildInterviewPreview}
+                        disabled={interviewImporting || !interviewCsvText.trim() || currentUser?.role !== 'admin'}
+                        className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded-lg cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        {interviewImporting ? 'Checking CSV...' : 'Preview Interview Import'}
+                      </button>
+                      {currentUser?.role !== 'admin' && (
+                        <p className="text-xs text-[var(--text-muted)]">Only admins can import interview results.</p>
                       )}
 
-                      {interviewPreview && interviewPreview.length === 0 && (
-                        <p className="text-xs text-red-400">No candidates found. Check that &quot;{nameColumn}&quot; is the correct name column — it appears empty for every row.</p>
-                      )}
-                      {interviewPreview && interviewPreview.length > 0 && (
+                      {interviewPreview && (
                         <div className="space-y-2">
-                          <p className="text-xs text-[var(--text-muted)]">{interviewPreview.length} candidates parsed — scores averaged across all graders</p>
+                          <p className="text-xs text-[var(--text-muted)]">
+                            {interviewPreview.candidates.length} candidates · {interviewPreview.format === 'developer_fa26' ? 'Developer' : 'Curriculum'} scoring detected
+                          </p>
+                          {interviewPreview.candidates.some(candidate => candidate.status === 'unresolved') && (
+                            <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                              <p className="text-xs font-medium text-amber-500">Map or exclude interviewees who are not exact matches.</p>
+                              {interviewPreview.candidates.filter(candidate => candidate.status === 'unresolved').map(candidate => (
+                                <label key={candidate.source_name} className="grid gap-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:items-center">
+                                  <span className="text-xs text-[var(--text-primary)]">{candidate.source_name}</span>
+                                  <select
+                                    value={interviewResolutions[candidate.source_name] ?? ''}
+                                    onChange={event => setInterviewResolutions(previous => ({ ...previous, [candidate.source_name]: event.target.value }))}
+                                    className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1.5 text-xs text-[var(--text-primary)]"
+                                  >
+                                    <option value="">Choose an accepted applicant…</option>
+                                    <option value="exclude">Exclude this interviewee</option>
+                                    {interviewPreview.eligible_applicants.map(applicant => (
+                                      <option key={applicant.id} value={applicant.id}>{applicant.name}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              ))}
+                            </div>
+                          )}
                           <div className="max-h-48 overflow-y-auto rounded-lg border border-[var(--border)]">
                             <table className="w-full text-xs">
                               <thead className="bg-[var(--bg-raised)] sticky top-0">
                                 <tr>
                                   <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">#</th>
                                   <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Candidate</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Interviewers</th>
                                   <th className="text-right px-3 py-2 text-[var(--text-muted)] font-medium">Avg Score</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-[var(--border)]">
-                                {interviewPreview.map((c, i) => (
-                                  <tr key={c.name} className="hover:bg-[var(--bg-raised)]">
+                                {interviewPreview.candidates.map((candidate, i) => (
+                                  <tr key={candidate.source_name} className="hover:bg-[var(--bg-raised)]">
                                     <td className="px-3 py-1.5 text-[var(--text-muted)]">{i + 1}</td>
-                                    <td className="px-3 py-1.5 text-[var(--text-primary)]">{c.name}</td>
-                                    <td className="px-3 py-1.5 text-right font-mono text-[#FF6B35]">{c.avg}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-primary)]">{candidate.applicant_name ?? candidate.source_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-secondary)]">{candidate.interviewers.join(', ') || '—'}</td>
+                                    <td className="px-3 py-1.5 text-right font-mono text-[#FF6B35]">{candidate.overall_score ?? '—'}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1524,7 +1443,9 @@ export default function AdminPage() {
                           </div>
                           <button
                             onClick={importInterviewResponses}
-                            disabled={interviewImporting}
+                            disabled={interviewImporting || interviewPreview.candidates.some(candidate =>
+                              candidate.status === 'unresolved' && !interviewResolutions[candidate.source_name]
+                            )}
                             className="plex-gradient disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg cursor-pointer"
                           >
                             {interviewImporting ? 'Creating session...' : 'Create Deliberation Session'}
@@ -1595,6 +1516,7 @@ export default function AdminPage() {
                       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--text-muted)]">
                         <span>Header row: {coffeeChatPreview.header_row}</span>
                         <span>Coffee chats: {coffeeChatPreview.coffee_chat_rows}</span>
+                        <span>Other notes: {coffeeChatPreview.other_note_rows}</span>
                         <span>Matched: {coffeeChatPreview.matched_rows.length}</span>
                         <span className={coffeeChatPreview.issues.length ? 'text-red-400' : 'text-green-400'}>
                           Issues: {coffeeChatPreview.issues.length}
@@ -1611,6 +1533,17 @@ export default function AdminPage() {
                         </div>
                       )}
 
+                      {coffeeChatPreview.warnings.length > 0 && (
+                        <div className="max-h-40 overflow-y-auto space-y-1">
+                          <p className="text-xs font-medium text-amber-500">Skipped non-coffee rows</p>
+                          {coffeeChatPreview.warnings.map(warning => (
+                            <p key={`${warning.row}-${warning.applicant_name}-${warning.reason}`} className="text-xs text-amber-500">
+                              Row {warning.row}{warning.applicant_name ? ` · ${warning.applicant_name}` : ''}: {warning.reason}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+
                       {coffeeChatPreview.issues.length === 0 && coffeeChatPreview.matched_rows.length > 0 && (
                         <>
                           <div className="max-h-44 overflow-y-auto rounded-md border border-[var(--border)]">
@@ -1619,6 +1552,7 @@ export default function AdminPage() {
                                 <tr>
                                   <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Applicant</th>
                                   <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Coffee chatter</th>
+                                  <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Type</th>
                                   <th className="text-left px-3 py-2 text-[var(--text-muted)] font-medium">Date</th>
                                 </tr>
                               </thead>
@@ -1627,6 +1561,7 @@ export default function AdminPage() {
                                   <tr key={row.source_row}>
                                     <td className="px-3 py-1.5 text-[var(--text-primary)]">{row.applicant_name}</td>
                                     <td className="px-3 py-1.5 text-[var(--text-secondary)]">{row.chatter_name}</td>
+                                    <td className="px-3 py-1.5 text-[var(--text-muted)]">{row.is_coffee_chat ? 'Coffee chat' : 'Not marked'}</td>
                                     <td className="px-3 py-1.5 text-[var(--text-muted)]">{row.chat_date ?? '—'}</td>
                                   </tr>
                                 ))}
