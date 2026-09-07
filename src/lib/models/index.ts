@@ -27,6 +27,8 @@ const RecruitmentCycleSchema = new Schema({
   status:                 { type: String, enum: ['active', 'ended'], default: 'active' },
   accepting_applications: { type: Boolean, default: false },
   application_deadline:   { type: Date, default: null },
+  coffee_chat_sheet_id:   { type: String, default: null, select: false },
+  coffee_chat_sheet_gid:  { type: String, default: null, select: false },
   configuration_version:  { type: Number, default: 0, min: 0 },
   submission_count:       { type: Number, default: 0, min: 0 },
   lifecycle_write_count:  { type: Number, default: 0, min: 0, select: false },

@@ -135,6 +135,10 @@ export default function AdminPage() {
   const [coffeeChatPreview, setCoffeeChatPreview] = useState<CoffeeChatPreview | null>(null)
   const [coffeeChatLoading, setCoffeeChatLoading] = useState(false)
   const [coffeeChatMessage, setCoffeeChatMessage] = useState('')
+  const [coffeeChatSheetUrl, setCoffeeChatSheetUrl] = useState('')
+  const [coffeeChatSourceLoading, setCoffeeChatSourceLoading] = useState(false)
+  const [coffeeChatSourceConnected, setCoffeeChatSourceConnected] = useState(false)
+  const [coffeeChatSourceMessage, setCoffeeChatSourceMessage] = useState('')
 
   const selectRound = useCallback((round: Round | null) => {
     setSelectedRound(round)
@@ -157,6 +161,9 @@ export default function AdminPage() {
     setCoffeeChatMessage('')
     setCoffeeChatPreview(null)
     setCoffeeChatCsvText('')
+    setCoffeeChatSheetUrl('')
+    setCoffeeChatSourceConnected(false)
+    setCoffeeChatSourceMessage('')
   }, [selectRound])
 
   // ── auth ─────────────────────────────────────────────────
@@ -277,6 +284,27 @@ export default function AdminPage() {
     void loadCycleDetails()
     return () => { cancelled = true }
   }, [selectedCycle, loadPrompts])
+
+  useEffect(() => {
+    const cycleId = selectedCycle?.id
+    if (!cycleId || currentUser?.role !== 'admin') return
+    let cancelled = false
+    fetch(`/api/coffee-chat-notes/source?cycle_id=${cycleId}`)
+      .then(async response => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data?.error ?? 'Unable to load the Google Sheet connection.')
+        if (cancelled) return
+        setCoffeeChatSheetUrl(data.sheet_url ?? '')
+        setCoffeeChatSourceConnected(Boolean(data.connected))
+      })
+      .catch(error => {
+        if (!cancelled) setCoffeeChatSourceMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      })
+      .finally(() => {
+        if (!cancelled) setCoffeeChatSourceLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [selectedCycle?.id, currentUser?.role])
 
   // Load grading progress or interview form URL when round changes
   useEffect(() => {
@@ -691,6 +719,30 @@ export default function AdminPage() {
       setCoffeeChatMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setCoffeeChatLoading(false)
+    }
+  }
+
+  async function connectCoffeeChatSheet() {
+    if (!selectedCycle || !coffeeChatSheetUrl.trim()) return
+    setCoffeeChatSourceLoading(true)
+    setCoffeeChatSourceMessage('')
+    try {
+      const response = await fetch('/api/coffee-chat-notes/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle_id: selectedCycle.id, sheet_url: coffeeChatSheetUrl }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data?.error ?? 'Unable to connect the Google Sheet.')
+      setCoffeeChatSourceConnected(true)
+      setCoffeeChatSourceMessage(
+        `Connected. ${data.matched} current notes matched; ${data.skipped} unmatched rows will be skipped.`,
+      )
+    } catch (error) {
+      setCoffeeChatSourceConnected(false)
+      setCoffeeChatSourceMessage(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setCoffeeChatSourceLoading(false)
     }
   }
 
@@ -1464,9 +1516,50 @@ export default function AdminPage() {
                 {/* Cycle-wide coffee chat import (shared by application + interview deliberations) */}
                 <div className="pt-3 border-t border-[var(--border)] space-y-3">
                   <div>
-                    <p className="text-sm font-medium text-[var(--text-primary)]">Import Coffee Chat Notes</p>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Live Coffee Chat Notes</p>
                     <p className="text-xs text-[var(--text-muted)] mt-1">
-                      Upload or paste the coffee-chat CSV. A successful import replaces the coffee-chat dataset for {selectedCycle?.name} and appears in every deliberation round in this cycle.
+                      Connect the Google Sheet once. Each applicant view will then load its latest coffee-chat and interaction notes automatically.
+                    </p>
+                  </div>
+                  {currentUser?.role === 'admin' ? (
+                    <>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input
+                          type="url"
+                          value={coffeeChatSheetUrl}
+                          onChange={event => {
+                            setCoffeeChatSheetUrl(event.target.value)
+                            setCoffeeChatSourceConnected(false)
+                            setCoffeeChatSourceMessage('')
+                          }}
+                          placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=0"
+                          className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:border-[#FF6B35] focus:outline-none"
+                        />
+                        <button
+                          onClick={connectCoffeeChatSheet}
+                          disabled={coffeeChatSourceLoading || !coffeeChatSheetUrl.trim()}
+                          className="plex-gradient rounded-lg px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {coffeeChatSourceLoading ? 'Checking Sheet...' : coffeeChatSourceConnected ? 'Reconnect Sheet' : 'Connect Google Sheet'}
+                        </button>
+                      </div>
+                      {coffeeChatSourceConnected && !coffeeChatSourceMessage && (
+                        <p className="text-sm text-green-500">Connected — notes refresh automatically whenever an applicant is opened.</p>
+                      )}
+                      {coffeeChatSourceMessage && (
+                        <p className={`text-sm ${coffeeChatSourceMessage.startsWith('Error') ? 'text-red-400' : 'text-green-500'}`}>
+                          {coffeeChatSourceMessage}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-xs text-[var(--text-muted)]">Only admins can connect or change the live Google Sheet.</p>
+                  )}
+
+                  <div className="pt-3 border-t border-[var(--border)]">
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Manual CSV fallback</p>
+                    <p className="mt-1 text-xs text-[var(--text-muted)]">
+                      You can still upload a snapshot if the connected Google Sheet is unavailable.
                     </p>
                   </div>
                   <div className="flex gap-2">
