@@ -90,6 +90,26 @@ function leadingNumber(value: string) {
   return match ? Number(match[0]) : null
 }
 
+function curriculumScore(value: string) {
+  const numeric = leadingNumber(value)
+  if (numeric !== null) return numeric
+
+  // The FA26 Curriculum form has zero-point choices whose labels do not
+  // begin with a number (for example, "Didn't attempt" and "Didn't start").
+  // The authoritative Ranked Applicants sheet counts these and blank rubric
+  // cells as zero, so mirror that behavior when rebuilding scores from the
+  // response export.
+  const normalized = value
+    .normalize('NFKC')
+    .trim()
+    .toLocaleLowerCase('en-US')
+    .replace(/[’]/g, "'")
+  if (!normalized || normalized.startsWith("didn't attempt") || normalized.startsWith("didn't start")) {
+    return 0
+  }
+  return null
+}
+
 function requireColumns(headers: string[], columns: string[]) {
   const normalized = new Set(headers.map(normalizeHeader))
   return columns.every(column => normalized.has(normalizeHeader(column)))
@@ -198,10 +218,19 @@ export function parseInterviewCsv(csvText: string): ParsedInterviewCsv {
       const criterion = criterionHeaders.get(normalizeHeader(header))
       if (!criterion) continue
       const raw = String(row[header] ?? '').trim()
-      if (!raw) continue
-      const value = isDeveloper && /^-?\d+(?:\.\d+)?$/.test(raw) ? Number(raw) : leadingNumber(raw)
+      if (isDeveloper && !raw) continue
+      const value = isDeveloper && /^-?\d+(?:\.\d+)?$/.test(raw)
+        ? Number(raw)
+        : isCurriculum
+          ? curriculumScore(raw)
+          : leadingNumber(raw)
       if (value === null || !Number.isFinite(value)) continue
-      scores.push({ key: criterion.key, label: criterion.label, value, raw: raw.slice(0, 500) })
+      scores.push({
+        key: criterion.key,
+        label: criterion.label,
+        value,
+        raw: (raw || 'No score submitted (counted as 0)').slice(0, 500),
+      })
     }
     const responses = headers.flatMap(header => {
       if (excludedHeaders.has(normalizeHeader(header))) return []

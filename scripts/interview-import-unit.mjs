@@ -72,6 +72,44 @@ try {
   assert.equal(curriculum.candidates[0].records[0].scores[0].value, 2)
   assert.equal(curriculum.candidates[0].records[0].responses[0].value, 'Clear reasoning')
 
+  const curriculumZeroLabels = parseInterviewCsv(makeCsv([
+    curriculumHeaders,
+    [
+      '9/4/2026',
+      'Interviewer Four',
+      'Katherine Johnson',
+      '2: Fully correct',
+      '2: Fully correct',
+      '2: Fully correct',
+      '3: Fully correct',
+      '3: Fully correct',
+      '3: Good',
+      "Didn't attempt",
+      "Didn't start, or didn't make significant progress.",
+      'No final notes',
+    ],
+    [
+      '9/4/2026',
+      'Interviewer Five',
+      'Katherine Johnson',
+      '2: Fully correct',
+      '2: Fully correct',
+      '2: Fully correct',
+      '3: Fully correct',
+      '3: Fully correct',
+      '3: Good',
+      '',
+      '',
+      'No final notes',
+    ],
+  ]))
+  assert.equal(curriculumZeroLabels.candidates[0].overall_score, 15)
+  assert.equal(curriculumZeroLabels.candidates[0].criterion_averages.length, 8)
+  assert.deepEqual(
+    curriculumZeroLabels.candidates[0].criterion_averages.slice(-2).map(score => score.value),
+    [0, 0],
+  )
+
   assert.throws(() => parseInterviewCsv('Name,Score\nAda,4'), /does not match/)
   if (process.env.INTERVIEW_DEV_CSV) {
     const liveDeveloper = parseInterviewCsv(await readFile(process.env.INTERVIEW_DEV_CSV, 'utf8'))
