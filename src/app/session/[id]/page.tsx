@@ -844,6 +844,8 @@ function CandidateDetail({
   const [notes, setNotes] = useState<CandidateNote[]>([])
   const [coffeeChats, setCoffeeChats] = useState<CoffeeChatNote[]>([])
   const [coffeeChatsOpen, setCoffeeChatsOpen] = useState(false)
+  const [coffeeChatsLoading, setCoffeeChatsLoading] = useState(false)
+  const [coffeeChatsMessage, setCoffeeChatsMessage] = useState<string | null>(null)
   const [noteText, setNoteText] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -855,11 +857,36 @@ function CandidateDetail({
   const [resumeLoading, setResumeLoading] = useState(false)
   const [resumeError, setResumeError] = useState<string | null>(null)
 
+  const loadCoffeeChats = useCallback(async (manual = false) => {
+    setCoffeeChatsLoading(true)
+    setCoffeeChatsMessage(null)
+    try {
+      const response = await fetch(`/api/coffee-chat-notes?candidate_id=${candidate.id}`, {
+        cache: 'no-store',
+      })
+      if (!response.ok) throw new Error('Unable to refresh coffee chat notes.')
+      const data = await response.json()
+      const nextNotes = Array.isArray(data) ? data : []
+      setCoffeeChats(nextNotes)
+      if (manual) {
+        setCoffeeChatsMessage(
+          nextNotes.length === 1
+            ? 'Synced 1 note from the connected sheet.'
+            : `Synced ${nextNotes.length} notes from the connected sheet.`,
+        )
+      }
+    } catch {
+      if (manual) setCoffeeChatsMessage('Could not refresh notes. Please try again.')
+    } finally {
+      setCoffeeChatsLoading(false)
+    }
+  }, [candidate.id])
+
   useEffect(() => {
     fetch(`/api/candidate-notes?candidate_id=${candidate.id}`)
       .then(res => res.ok ? res.json() : [])
       .then(data => setNotes(data))
-    fetch(`/api/coffee-chat-notes?candidate_id=${candidate.id}`)
+    fetch(`/api/coffee-chat-notes?candidate_id=${candidate.id}`, { cache: 'no-store' })
       .then(res => res.ok ? res.json() : [])
       .then(data => setCoffeeChats(Array.isArray(data) ? data : []))
   }, [candidate.id])
@@ -1053,14 +1080,35 @@ function CandidateDetail({
       {/* Grader essay comments (rubric rounds) */}
       <GraderComments reviews={candidate.grader_reviews} />
 
-      {coffeeChats.length > 0 && (
-        <div className="mb-6 rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5 overflow-hidden">
-          <div className="px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Coffee chats</p>
-            <p className="text-sm text-[var(--text-secondary)] mt-1">
-              <span className="font-medium text-[var(--text-primary)]">Coffee chatters:</span>{' '}
-              {[...new Set(coffeeChats.map(chat => chat.chatter_name))].join(', ')}
-            </p>
+      <div className="mb-6 rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5 overflow-hidden">
+        <div className="px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#FF6B35]">Coffee chats</p>
+              {coffeeChats.length > 0 ? (
+                <p className="text-sm text-[var(--text-secondary)] mt-1">
+                  <span className="font-medium text-[var(--text-primary)]">Coffee chatters:</span>{' '}
+                  {[...new Set(coffeeChats.map(chat => chat.chatter_name))].join(', ')}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-[var(--text-muted)]">
+                  {coffeeChatsLoading ? 'Checking the connected sheet…' : 'No matching notes currently.'}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadCoffeeChats(true)}
+              disabled={coffeeChatsLoading}
+              className="rounded-lg border border-[#FF6B35]/30 bg-[var(--bg-raised)] px-3 py-1.5 text-xs font-semibold text-[#FF6B35] transition-opacity hover:opacity-80 disabled:cursor-wait disabled:opacity-50"
+            >
+              {coffeeChatsLoading ? 'Resyncing…' : 'Resync coffee chat notes'}
+            </button>
+          </div>
+          {coffeeChatsMessage && (
+            <p className="mt-2 text-xs text-[var(--text-muted)]" role="status">{coffeeChatsMessage}</p>
+          )}
+          {coffeeChats.length > 0 && (
             <button
               type="button"
               onClick={() => setCoffeeChatsOpen(open => !open)}
@@ -1069,9 +1117,10 @@ function CandidateDetail({
             >
               {coffeeChatsOpen ? 'Hide coffee chat notes' : `View coffee chat notes (${coffeeChats.length})`}
             </button>
-          </div>
+          )}
+        </div>
 
-          {coffeeChatsOpen && (
+        {coffeeChats.length > 0 && coffeeChatsOpen && (
             <div className="border-t border-[#FF6B35]/20 px-4 py-3 space-y-3">
               {coffeeChats.map(chat => (
                 <div key={chat.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
@@ -1111,9 +1160,8 @@ function CandidateDetail({
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Vote actions */}
       {sessionActive && (
