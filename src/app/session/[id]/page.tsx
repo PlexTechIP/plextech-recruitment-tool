@@ -113,6 +113,17 @@ function safeExternalUrl(value: string | null | undefined) {
   }
 }
 
+function compareCandidatesByScore(a: Candidate, b: Candidate) {
+  const aScore = Number(a.data?.score ?? a.data?.Scores)
+  const bScore = Number(b.data?.score ?? b.data?.Scores)
+  const aHasScore = Number.isFinite(aScore)
+  const bHasScore = Number.isFinite(bScore)
+
+  if (aHasScore && bHasScore && aScore !== bScore) return bScore - aScore
+  if (aHasScore !== bHasScore) return aHasScore ? -1 : 1
+  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+}
+
 export default function SessionPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: sessionId } = use(params)
   const router = useRouter()
@@ -427,15 +438,13 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 
   const myName = userName
 
-  const STATUS_ORDER: Record<string, number> = { accepted: 0, hold: 1, pending: 2, rejected: 3 }
-
   const filteredCandidates = candidates
     .filter(c => {
       const matchesStatus = filterStatus === 'all' || c.status === filterStatus
       const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase())
       return matchesStatus && matchesSearch
     })
-    .sort((a, b) => (STATUS_ORDER[a.status] ?? 2) - (STATUS_ORDER[b.status] ?? 2))
+    .sort(compareCandidatesByScore)
 
   const votesFor = (id: string) => votes.filter(v => v.candidate_id === id)
   const myVote = (id: string, type: VoteType) =>
@@ -735,11 +744,9 @@ function ListView({
 }) {
   const [search, setSearch] = useState('')
 
-  const STATUS_ORDER: Record<string, number> = { accepted: 0, hold: 1, pending: 2, rejected: 3 }
-
   const filtered = candidates
     .filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => (STATUS_ORDER[a.status] ?? 2) - (STATUS_ORDER[b.status] ?? 2))
+    .sort(compareCandidatesByScore)
 
   function cvotes(id: string) { return votes.filter(v => v.candidate_id === id) }
 
