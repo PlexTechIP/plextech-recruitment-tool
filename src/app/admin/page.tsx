@@ -1444,6 +1444,11 @@ export default function AdminPage() {
                       {currentUser?.role !== 'admin' && (
                         <p className="text-xs text-[var(--text-muted)]">Only admins can import interview results.</p>
                       )}
+                      {!interviewPreview && interviewMessage && (
+                        <p className={`text-sm ${interviewMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                          {interviewMessage}
+                        </p>
+                      )}
 
                       {interviewPreview && (
                         <div className="space-y-2">

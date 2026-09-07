@@ -48,7 +48,7 @@ async function getEligibleApplicants(round: { _id: mongoose.Types.ObjectId; cycl
   if (!round.role) throw new InterviewImportRejected('The interview round must have a Curriculum or Developer role.', 409)
   const priorRound = await Round.findOne({
     cycle_id: round.cycle_id,
-    order_index: { $lt: round.order_index },
+    order_index: mongoose.trusted({ $lt: round.order_index }),
   }).sort({ order_index: -1 }).select('_id').lean()
   if (!priorRound) throw new InterviewImportRejected('No prior recruitment round was found.', 409)
 
@@ -57,7 +57,7 @@ async function getEligibleApplicants(round: { _id: mongoose.Types.ObjectId; cycl
     ? await Candidate.find({
         session_id: mongoose.trusted({ $in: priorSessions.map(session => session._id) }),
         status: 'accepted',
-        applicant_id: { $ne: null },
+        applicant_id: mongoose.trusted({ $ne: null }),
       }).select('applicant_id name').lean()
     : []
   const applicantIds = acceptedCandidates.flatMap(candidate => candidate.applicant_id ? [candidate.applicant_id] : [])
@@ -202,7 +202,7 @@ export async function POST(req: NextRequest) {
       ).select('_id').lean()
       if (!cycle) throw new InterviewImportRejected('The recruitment cycle is no longer active.', 409)
       const guardedRound = await Round.findOneAndUpdate(
-        { _id: roundId, cycle_id: cycleId, grading_type: 'interview', role: expectedRole, status: { $ne: 'ended' } },
+        { _id: roundId, cycle_id: cycleId, grading_type: 'interview', role: expectedRole, status: mongoose.trusted({ $ne: 'ended' }) },
         { $set: { status: 'deliberating' }, $inc: { lifecycle_write_count: 1 } },
         { new: true, session: dbSession },
       ).select('_id name').lean()
