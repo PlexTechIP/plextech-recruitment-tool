@@ -85,19 +85,27 @@ function GenderRatio({ candidates }: { candidates: Candidate[] }) {
     totals[categorizeGender(candidate.data?.gender)] += 1
     return totals
   }, { male: 0, female: 0, other: 0, unknown: 0 })
-  const allCounts = summarize(candidates)
-  const acceptedCandidates = candidates.filter(candidate => candidate.status === 'accepted')
-  const acceptedCounts = summarize(acceptedCandidates)
+
+  const groups = [
+    { label: 'All applicants', rows: candidates, labelClass: 'text-[var(--text-primary)]' },
+    { label: 'Not rejected', rows: candidates.filter(candidate => candidate.status !== 'rejected'), labelClass: 'text-purple-600' },
+    { label: 'Pending', rows: candidates.filter(candidate => candidate.status === 'pending'), labelClass: 'text-[var(--text-primary)]' },
+    { label: 'Accepted / Greened', rows: candidates.filter(candidate => candidate.status === 'accepted'), labelClass: 'text-green-600' },
+    { label: 'Hold', rows: candidates.filter(candidate => candidate.status === 'hold'), labelClass: 'text-yellow-600' },
+    { label: 'Rejected', rows: candidates.filter(candidate => candidate.status === 'rejected'), labelClass: 'text-red-600' },
+  ]
 
   return (
-    <div className="shrink-0 space-y-1.5 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="w-36 shrink-0 font-semibold text-[var(--text-primary)]">All applicants ({candidates.length})</span>
-        <GenderBreakdown counts={allCounts} total={candidates.length} />
-      </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="w-36 shrink-0 font-semibold text-green-600">Greened / Accepted ({acceptedCandidates.length})</span>
-        <GenderBreakdown counts={acceptedCounts} total={acceptedCandidates.length} />
+    <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-xs">
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+        {groups.map(group => (
+          <div key={group.label} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/60 px-3 py-1.5">
+            <span className={`w-36 shrink-0 font-semibold ${group.labelClass}`}>
+              {group.label} ({group.rows.length})
+            </span>
+            <GenderBreakdown counts={summarize(group.rows)} total={group.rows.length} />
+          </div>
+        ))}
       </div>
     </div>
   )
