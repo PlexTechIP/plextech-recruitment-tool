@@ -130,6 +130,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [search, setSearch] = useState('')
   const [idCopied, setIdCopied] = useState(false)
   const [viewMode, setViewMode] = useState<'candidate' | 'list'>('candidate')
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
   const [bulkMode, setBulkMode] = useState(false)
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set())
   const [bulkUpdating, setBulkUpdating] = useState(false)
@@ -563,7 +564,33 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       ) : (<>
 
         {/* Left panel — candidate list */}
-        <div className="w-72 shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--bg-surface)]">
+        <div
+          className={`relative shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--bg-surface)] transition-[width] duration-200 ease-out ${
+            sidebarExpanded ? 'w-[min(28rem,55vw)]' : 'w-72'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setSidebarExpanded(expanded => !expanded)}
+            title={sidebarExpanded ? 'Use compact sidebar' : 'Expand sidebar'}
+            aria-label={sidebarExpanded ? 'Use compact sidebar' : 'Expand sidebar'}
+            aria-pressed={sidebarExpanded}
+            className="absolute -right-3 top-3 z-20 flex h-7 w-7 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] shadow-sm transition-colors hover:border-[#FF6B35]/50 hover:text-[#FF6B35]"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {sidebarExpanded ? (
+                <>
+                  <polyline points="11 17 6 12 11 7" />
+                  <polyline points="18 17 13 12 18 7" />
+                </>
+              ) : (
+                <>
+                  <polyline points="6 17 11 12 6 7" />
+                  <polyline points="13 17 18 12 13 7" />
+                </>
+              )}
+            </svg>
+          </button>
           {/* Admin toggle */}
           {isAdmin && (
             <div className="shrink-0">
