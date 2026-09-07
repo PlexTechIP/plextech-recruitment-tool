@@ -22,7 +22,22 @@ const compiledPath = join(temporaryDirectory, 'module.mjs')
 
 try {
   await writeFile(compiledPath, compiled, { encoding: 'utf8', mode: 0o600 })
-  const { parseAndMatchCoffeeChatCsv } = await import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
+  const { fetchGoogleSheetCsv, googleSheetCsvUrl, parseAndMatchCoffeeChatCsv, parseGoogleSheetUrl } = await import(`${pathToFileURL(compiledPath).href}?v=${Date.now()}`)
+  const sheetSource = parseGoogleSheetUrl('https://docs.google.com/spreadsheets/d/1abcdefghijklmnopqrstuvwxyz123456789/edit?gid=42#gid=42')
+  assert.deepEqual(sheetSource, { sheetId: '1abcdefghijklmnopqrstuvwxyz123456789', gid: '42' })
+  assert.equal(
+    googleSheetCsvUrl(sheetSource),
+    'https://docs.google.com/spreadsheets/d/1abcdefghijklmnopqrstuvwxyz123456789/export?format=csv&gid=42',
+  )
+  assert.equal(parseGoogleSheetUrl('https://example.com/spreadsheets/d/1abcdefghijklmnopqrstuvwxyz123456789/edit?gid=42'), null)
+  assert.equal(parseGoogleSheetUrl('https://docs.google.com/spreadsheets/d/1abcdefghijklmnopqrstuvwxyz123456789/edit?gid=not-a-number'), null)
+  if (process.env.COFFEE_CHAT_SHEET_URL) {
+    const liveSource = parseGoogleSheetUrl(process.env.COFFEE_CHAT_SHEET_URL)
+    assert.ok(liveSource)
+    const liveCsv = await fetchGoogleSheetCsv(liveSource)
+    assert.match(liveCsv, /PlexTech Member/)
+    assert.match(liveCsv, /Was this a Coffee Chat\?/)
+  }
   const applicants = [
     { id: '1', first_name: 'Ada', last_name: 'Lovelace' },
     { id: '2', first_name: 'Grace', last_name: 'Hopper' },

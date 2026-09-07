@@ -3,6 +3,43 @@ import Papa from 'papaparse'
 export const MAX_COFFEE_CHAT_CSV_BYTES = 2 * 1024 * 1024
 export const MAX_COFFEE_CHAT_ROWS = 5000
 
+export type GoogleSheetSource = { sheetId: string; gid: string }
+
+export function parseGoogleSheetUrl(value: string): GoogleSheetSource | null {
+  try {
+    const url = new URL(value.trim())
+    if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com') return null
+    const match = url.pathname.match(/^\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})(?:\/|$)/)
+    if (!match) return null
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''))
+    const gid = url.searchParams.get('gid') ?? hashParams.get('gid') ?? '0'
+    if (!/^\d+$/.test(gid)) return null
+    return { sheetId: match[1], gid }
+  } catch {
+    return null
+  }
+}
+
+export function googleSheetCsvUrl(source: GoogleSheetSource) {
+  return `https://docs.google.com/spreadsheets/d/${source.sheetId}/export?format=csv&gid=${source.gid}`
+}
+
+export async function fetchGoogleSheetCsv(source: GoogleSheetSource) {
+  const response = await fetch(googleSheetCsvUrl(source), {
+    cache: 'no-store',
+    redirect: 'follow',
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!response.ok) throw new Error(`Google Sheets returned HTTP ${response.status}.`)
+  const declaredLength = Number(response.headers.get('content-length') ?? 0)
+  if (declaredLength > MAX_COFFEE_CHAT_CSV_BYTES) throw new Error('Google Sheet CSV exceeds the 2 MB limit.')
+  const csvText = await response.text()
+  if (Buffer.byteLength(csvText, 'utf8') > MAX_COFFEE_CHAT_CSV_BYTES) {
+    throw new Error('Google Sheet CSV exceeds the 2 MB limit.')
+  }
+  return csvText
+}
+
 export type CoffeeChatImportIssue = {
   row: number
   applicant_name: string

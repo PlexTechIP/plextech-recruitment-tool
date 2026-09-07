@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, Candidate, CoffeeChatNote, Round, Session, SessionBan, SessionMember } from '@/lib/models'
-import { normalizePersonName } from '@/lib/coffeeChats'
+import { Applicant, Candidate, CoffeeChatNote, RecruitmentCycle, Round, Session, SessionBan, SessionMember } from '@/lib/models'
+import { fetchGoogleSheetCsv, normalizePersonName, parseAndMatchCoffeeChatCsv } from '@/lib/coffeeChats'
 import { requireRole } from '@/lib/serverAuth'
 
 export async function GET(req: NextRequest) {
@@ -46,6 +46,55 @@ export async function GET(req: NextRequest) {
   }
   if (!applicantId) return NextResponse.json([])
 
+  if (round) {
+    const cycle = await RecruitmentCycle.findById(round.cycle_id)
+      .select('+coffee_chat_sheet_id +coffee_chat_sheet_gid')
+      .lean()
+    if (cycle?.coffee_chat_sheet_id) {
+      try {
+        const [csvText, applicants] = await Promise.all([
+          fetchGoogleSheetCsv({
+            sheetId: cycle.coffee_chat_sheet_id,
+            gid: cycle.coffee_chat_sheet_gid ?? '0',
+          }),
+          Applicant.find({ cycle_id: round.cycle_id }).select('first_name last_name').lean(),
+        ])
+        const preview = parseAndMatchCoffeeChatCsv(csvText, applicants.map(applicant => ({
+          id: applicant._id.toString(),
+          first_name: applicant.first_name,
+          last_name: applicant.last_name,
+        })))
+        const liveNotes = preview.matched_rows
+          .filter(note => note.applicant_id === applicantId)
+          .sort((left, right) => {
+            if (!left.chat_date && right.chat_date) return 1
+            if (left.chat_date && !right.chat_date) return -1
+            return String(left.chat_date ?? '').localeCompare(String(right.chat_date ?? '')) || left.source_row - right.source_row
+          })
+          .map(note => ({
+            id: `live-${note.source_row}`,
+            cycle_id: round.cycle_id.toString(),
+            applicant_id: note.applicant_id,
+            applicant_name: note.applicant_name,
+            chatter_name: note.chatter_name,
+            notes: note.notes,
+            is_coffee_chat: note.is_coffee_chat,
+            recommended_overall: note.recommended_overall,
+            chat_date: note.chat_date,
+            other_notes: note.other_notes,
+            imported_by: 'Live Google Sheet',
+            imported_at: new Date().toISOString(),
+          }))
+        return NextResponse.json(liveNotes, {
+          headers: { 'Cache-Control': 'no-store, max-age=0', 'X-Coffee-Chat-Source': 'live' },
+        })
+      } catch {
+        // Keep deliberations usable during a temporary Google Sheets outage by
+        // falling back to the last successfully imported database snapshot.
+      }
+    }
+  }
+
   const notes = await CoffeeChatNote.find({ applicant_id: applicantId }).lean()
   notes.sort((a, b) => {
     if (!a.chat_date && b.chat_date) return 1
@@ -60,5 +109,5 @@ export async function GET(req: NextRequest) {
     cycle_id: note.cycle_id.toString(),
     applicant_id: note.applicant_id.toString(),
     _id: undefined,
-  })))
+  })), { headers: { 'Cache-Control': 'no-store, max-age=0', 'X-Coffee-Chat-Source': 'database' } })
 }
