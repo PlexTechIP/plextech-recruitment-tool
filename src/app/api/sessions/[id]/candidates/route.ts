@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
-import { Applicant, Candidate, Round, Session, SessionBan, SessionMember } from '@/lib/models'
+import { Applicant, Candidate, RecruitmentCycle, Round, Session, SessionBan, SessionMember } from '@/lib/models'
+import { syncBehavioral, type BehavioralSource } from '@/lib/behavioralSync'
 import { requireRole } from '@/lib/serverAuth'
 import { isNonEmptyString, isNullableObjectId, isPlainRecord, isSessionId, readJsonBody } from '@/lib/apiValidation'
 import { consumeUserRateLimit } from '@/lib/rateLimit'
@@ -20,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   await connectDB()
   const { id } = await params
   if (!isSessionId(id)) return NextResponse.json({ error: 'Invalid session id.' }, { status: 400 })
-  const session = await Session.findById(id).select('created_by').lean()
+  const session = await Session.findById(id).select('created_by round_id status').lean()
   if (!session) return NextResponse.json({ error: 'Session not found.' }, { status: 404 })
   const isCreator = session.created_by?.toLowerCase() === auth.email.toLowerCase()
   const [isMember, banned] = await Promise.all([
@@ -30,6 +31,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   if (banned) return NextResponse.json({ error: 'You have been removed from this session.' }, { status: 403 })
   if (!isCreator && !isMember) {
     return NextResponse.json({ error: 'Join this session to view candidates.' }, { status: 403 })
+  }
+  if (session.round_id && session.status === 'active') {
+    const round = await Round.findById(session.round_id).select('cycle_id').lean()
+    const cycle = round ? await RecruitmentCycle.findById(round.cycle_id).schemaLevelProjections(false).select('behavioral_source').lean() : null
+    const source = cycle?.behavioral_source as BehavioralSource | null
+    if (cycle && source?.rounds?.some(r => r.id === session.round_id?.toString())) {
+      await syncBehavioral(cycle._id.toString()).catch(() => undefined)
+    }
   }
   const candidates = await Candidate.find({ session_id: id }).sort({ created_at: 1 }).lean()
   const applicantIds = candidates

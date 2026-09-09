@@ -6,6 +6,7 @@ import { getCurrentUser, canAccessAdmin, CurrentUser } from '@/lib/auth'
 import { RecruitmentCycle, Round, EssayPrompt, Applicant, RoundStatus } from '@/lib/types'
 import { evaluateResults } from '@/lib/scoring'
 import { buildGraderAssignments } from '@/lib/graderAssignments'
+import BehavioralSyncPanel from '@/components/BehavioralSyncPanel'
 
 // ─── tiny shared UI ──────────────────────────────────────────
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1205,6 +1206,7 @@ export default function AdminPage() {
             </Section>
 
             {/* Round detail */}
+            {currentUser?.role === 'admin' && <BehavioralSyncPanel key={selectedCycle.id} cycleId={selectedCycle.id} rounds={rounds} admin />}
             <div ref={roundDetailRef} />
             {selectedRound && (
               <Section title={`Round: ${selectedRound.name}`}>

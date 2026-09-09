@@ -7,6 +7,7 @@ import { useSession, signOut } from 'next-auth/react'
 import { Session, Candidate, Vote, VoteType, CandidateNote, GraderReview, CoffeeChatNote } from '@/lib/types'
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
+import BehavioralSyncPanel from '@/components/BehavioralSyncPanel'
 
 const STATUS_COLORS: Record<string, string> = {
   accepted: 'bg-green-500',
@@ -203,7 +204,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
           (stats.applicants ?? []).map((a: StatRow) => [a.applicant_id, a.reviews ?? []])
         )
         cands = cands.map(c => {
-          if (!c.applicant_id) return c
+          if (!c.applicant_id || c.data?.interview) return c
           const scores = scoreMap.get(c.applicant_id)
           if (!scores) return c
           return { ...c, data: { ...c.data, ...scores }, grader_reviews: reviewMap.get(c.applicant_id) ?? [] }
@@ -537,6 +538,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         </div>
       </header>
 
+      <BehavioralSyncPanel sessionId={sessionId} admin={authSession?.user?.role === 'admin'} />
       {isAdmin && bulkMode && (
         <div className="shrink-0 flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2">
           <span className="mr-1 text-sm font-medium text-[var(--text-primary)]">
@@ -691,7 +693,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                       </div>
                       <div className="flex items-center gap-2 mt-1 ml-4">
                         {c.data.score != null && (
-                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(1)}</span>
+                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(2)}</span>
                         )}
                         {c.data.Scores != null && c.data.score == null && (
                           <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
@@ -842,7 +844,7 @@ function ListView({
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right text-[var(--text-muted)] font-mono">
-                    {score != null ? Number(score).toFixed(1) : '—'}
+                    {score != null ? Number(score).toFixed(2) : '—'}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {vouches > 0 ? <span className="text-green-500 font-medium">{vouches}</span> : <span className="text-[var(--text-muted)]">—</span>}
@@ -1483,13 +1485,16 @@ function GraderComments({ reviews }: { reviews?: GraderReview[] }) {
 }
 
 type InterviewData = {
-  format: 'developer_fa26' | 'curriculum_fa26'
+  format: 'developer_fa26' | 'curriculum_fa26' | 'behavioral_fa26'
   interviewers: string[]
   criterion_averages: { key: string; label: string; value: number }[]
   overall_score: number | null
   records: {
     source_row: number
     interviewer: string
+    timestamp?: string
+    complete?: boolean
+    counted?: boolean
     scores: { key: string; label: string; value: number; raw: string }[]
     responses: { label: string; value: string }[]
   }[]
@@ -1498,7 +1503,7 @@ type InterviewData = {
 function isInterviewData(value: unknown): value is InterviewData {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
-  return (record.format === 'developer_fa26' || record.format === 'curriculum_fa26')
+  return (record.format === 'developer_fa26' || record.format === 'curriculum_fa26' || record.format === 'behavioral_fa26')
     && Array.isArray(record.interviewers)
     && Array.isArray(record.criterion_averages)
     && Array.isArray(record.records)
@@ -1506,7 +1511,8 @@ function isInterviewData(value: unknown): value is InterviewData {
 
 function InterviewDetails({ value }: { value: unknown }) {
   if (!isInterviewData(value)) return null
-  const scoreSuffix = value.format === 'developer_fa26' ? ' / 7' : ' / 19'
+  const behavioral = value.format === 'behavioral_fa26'
+  const scoreSuffix = behavioral ? '' : value.format === 'developer_fa26' ? ' / 7' : ' / 19'
   return (
     <div className="mb-6 overflow-hidden rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5">
       <div className="space-y-3 px-4 py-3">
@@ -1519,9 +1525,9 @@ function InterviewDetails({ value }: { value: unknown }) {
             </p>
           </div>
           <div className="rounded-lg border border-[#FF6B35]/25 bg-[var(--bg-raised)] px-3 py-2 text-right">
-            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Overall score</p>
+            <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{behavioral ? 'Behavioral average' : 'Overall score'}</p>
             <p className="font-mono text-lg font-semibold text-[#FF6B35]">
-              {value.overall_score ?? '—'}{value.overall_score === null ? '' : scoreSuffix}
+              {value.overall_score === null ? (behavioral ? 'Awaiting behavioral scores' : '—') : value.overall_score.toFixed(2)}{value.overall_score === null ? '' : scoreSuffix}
             </p>
           </div>
         </div>
@@ -1530,7 +1536,7 @@ function InterviewDetails({ value }: { value: unknown }) {
             {value.criterion_averages.map(score => (
               <div key={score.key} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-2.5">
                 <p className="truncate text-[10px] text-[var(--text-muted)]" title={score.label}>{score.label}</p>
-                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value}</p>
+                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}</p>
               </div>
             ))}
           </div>
@@ -1542,10 +1548,11 @@ function InterviewDetails({ value }: { value: unknown }) {
         </summary>
         <div className="space-y-3 px-4 pb-4">
           {value.records.map(record => (
-            <div key={`${record.source_row}-${record.interviewer}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
-              <div className="mb-3">
+            <details key={`${record.source_row}-${record.interviewer}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
+              <summary className="mb-3 cursor-pointer">
                 <p className="text-sm font-semibold text-[var(--text-primary)]">{record.interviewer}</p>
-              </div>
+                {behavioral && <p className="text-xs text-[var(--text-muted)]">{record.timestamp} · {record.counted ? 'Included in average' : record.complete ? 'Earlier response (not counted)' : 'Incomplete (not counted)'}</p>}
+              </summary>
               {record.scores.length > 0 && (
                 <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {record.scores.map(score => (
@@ -1566,7 +1573,7 @@ function InterviewDetails({ value }: { value: unknown }) {
                   ))}
                 </div>
               )}
-            </div>
+            </details>
           ))}
         </div>
       </details>
