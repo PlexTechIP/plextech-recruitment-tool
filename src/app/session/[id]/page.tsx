@@ -31,7 +31,6 @@ const STATUS_BTN: Record<string, { active: string; inactive: string }> = {
   pending: { active: 'bg-[var(--bg-active)] text-[var(--text-primary)] border-transparent', inactive: 'bg-[var(--bg-raised)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)]' },
 }
 
-const VOTE_FETCH_BATCH_SIZE = 100
 
 type ApplicantInfo = {
   linkedin: string | null
@@ -149,6 +148,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const voteReadInFlight = useRef(false)
   const voteWriteInFlight = useRef(false)
   const voteRevision = useRef(0)
+  const decisionRevision = useRef(0)
+  const liveRevision = useRef(0)
+  const pendingDecisions = useRef(new Set<string>())
   const voteCandidateIds = useRef<string[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const seenFocus = useRef({ session: '', version: -1 })
@@ -182,20 +184,35 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     if (!ids.length) return
     voteReadInFlight.current = true
     const revision = voteRevision.current
+    const decisions = decisionRevision.current
     try {
-      const batches = await Promise.all(Array.from({ length: Math.ceil(ids.length / VOTE_FETCH_BATCH_SIZE) }, (_, i) =>
-        fetch(`/api/votes?candidate_ids=${ids.slice(i * VOTE_FETCH_BATCH_SIZE, (i + 1) * VOTE_FETCH_BATCH_SIZE).join(',')}`, { signal: AbortSignal.timeout(10000), cache: 'no-store' })
-          .then(async response => { if (!response.ok) throw new Error('Vote refresh failed'); return response.json() as Promise<Vote[]> }),
-      ))
+      const response = await fetch(`/api/sessions/${sessionId}/live`, { signal: AbortSignal.timeout(10000), cache: 'no-store' })
+      if (response.status === 403) { setBanned(true); return }
+      if (!response.ok) throw new Error('Live refresh failed')
+      const snapshot: { votes: Vote[]; candidates: Pick<Candidate, 'id' | 'status'>[]; session: Partial<Session> } = await response.json()
+      liveRevision.current++
       // A read started before a successful mutation must not undo its UI update.
-      if (revision === voteRevision.current && !voteWriteInFlight.current) setVotes(batches.flat())
+      if (revision === voteRevision.current && !voteWriteInFlight.current) setVotes(snapshot.votes)
+      if (decisions === decisionRevision.current) {
+        const statuses = new Map(snapshot.candidates.map(c => [c.id, c.status]))
+        setCandidates(current => current.map(c => !pendingDecisions.current.has(c.id) && statuses.has(c.id) ? { ...c, status: statuses.get(c.id)! } : c))
+      }
+      setSession(current => current ? { ...current, ...snapshot.session } : current)
+      if ((snapshot.session.focus_version ?? 0) > seenFocus.current.version) {
+        seenFocus.current = { session: sessionId, version: snapshot.session.focus_version ?? 0 }
+        if (snapshot.session.focused_candidate_id && ids.includes(snapshot.session.focused_candidate_id)) {
+          setSelectedId(snapshot.session.focused_candidate_id); setViewMode('candidate'); setFilterStatus('all'); setSearch(''); setBulkMode(false)
+        }
+      }
     } catch { /* Retain the previous votes; retry on the next lightweight poll. */ }
     finally { voteReadInFlight.current = false }
-  }, [])
+  }, [sessionId])
 
   const loadData = useCallback(async () => {
     if (refreshInFlight.current) return
     refreshInFlight.current = true
+    const liveAtStart = liveRevision.current
+    const decisionsAtStart = decisionRevision.current
     try {
     const read = (url: string) => fetch(url, { signal: AbortSignal.timeout(15000) })
     const [sessionRes, candidatesRes, membersRes] = await Promise.all([
@@ -244,7 +261,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       }
     }
 
-    if (sessionData) setSession(sessionData)
+    if (sessionData) setSession(current => current && liveAtStart !== liveRevision.current ? { ...sessionData, status: current.status, anonymous: current.anonymous, one_vouch_per_member: current.one_vouch_per_member, focused_candidate_id: current.focused_candidate_id, focus_version: current.focus_version } : sessionData)
     if (sessionData && (seenFocus.current.session !== sessionId || (sessionData.focus_version ?? 0) > seenFocus.current.version)) {
       seenFocus.current = { session: sessionId, version: sessionData.focus_version ?? 0 }
       if (sessionData.focused_candidate_id && cands.some(c => c.id === sessionData.focused_candidate_id)) {
@@ -255,7 +272,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         setBulkMode(false)
       }
     }
-    setCandidates(cands)
+    setCandidates(current => {
+      const previous = new Map(current.map(c => [c.id, c.status]))
+      return cands.map(c => previous.has(c.id) && (liveAtStart !== liveRevision.current || decisionsAtStart !== decisionRevision.current || pendingDecisions.current.has(c.id)) ? { ...c, status: previous.get(c.id)! } : c)
+    })
     voteCandidateIds.current = cands.map(c => c.id)
     setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
     setLoading(false)
@@ -307,7 +327,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       // Jitter spreads viewers' requests instead of synchronized bursts.
       interval = setInterval(() => {
         if (document.visibilityState === 'visible') void loadData()
-      }, 12000 + Math.random() * 2000)
+      }, 30000 + Math.random() * 5000)
       voteInterval = setInterval(() => {
         if (document.visibilityState === 'visible') void loadVotes()
       }, 2000 + Math.random() * 1000)
@@ -401,6 +421,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }
 
   async function handleStatusChange(candidateId: string, status: string) {
+    if (pendingDecisions.current.has(candidateId)) return
+    pendingDecisions.current.add(candidateId)
+    decisionRevision.current++
     const nextStatus = status as Candidate['status']
     const previousStatus = candidates.find(candidate => candidate.id === candidateId)?.status
     setCandidates(current => current.map(candidate => (
@@ -417,7 +440,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         const err = await res.json().catch(() => ({}))
         throw new Error(err?.error ?? res.statusText)
       }
-      void loadData()
+      void loadVotes()
     } catch (error) {
       if (previousStatus) {
         setCandidates(current => current.map(candidate => (
@@ -427,6 +450,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         )))
       }
       alert(`Could not update status: ${error instanceof Error ? error.message : 'Check your connection and try again.'}`)
+    } finally {
+      pendingDecisions.current.delete(candidateId)
+      decisionRevision.current++
+      void loadVotes()
     }
   }
 
@@ -449,6 +476,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     if (candidateIds.length === 0 || bulkUpdating) return
     const label = status.charAt(0).toUpperCase() + status.slice(1)
     if (!confirm(`Set ${candidateIds.length} selected candidate${candidateIds.length === 1 ? '' : 's'} to ${label}?`)) return
+    if (candidateIds.some(id => pendingDecisions.current.has(id))) return
+    candidateIds.forEach(id => pendingDecisions.current.add(id))
+    decisionRevision.current++
 
     const nextStatus = status as Candidate['status']
     const selectedIdSet = new Set(candidateIds)
@@ -473,7 +503,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         throw new Error(err?.error ?? res.statusText)
       }
       exitBulkMode()
-      void loadData()
+      void loadVotes()
     } catch (error) {
       setCandidates(current => current.map(candidate => {
         const previousStatus = previousStatuses.get(candidate.id)
@@ -484,6 +514,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       alert(`Could not update selected candidates: ${error instanceof Error ? error.message : 'Check your connection and try again.'}`)
     } finally {
       setBulkUpdating(false)
+      candidateIds.forEach(id => pendingDecisions.current.delete(id))
+      decisionRevision.current++
+      void loadVotes()
     }
   }
 
