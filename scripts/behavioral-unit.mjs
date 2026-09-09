@@ -10,6 +10,21 @@ try {
   const file = join(dir, 'module.mjs')
   await writeFile(file, ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText)
   const { BEHAVIORAL_HEADERS: headers, BEHAVIORAL_CRITERIA: criteria, parseBehavioralCsv: parse, aggregateBehavioral: aggregate, matchBehavioral: match } = await import(pathToFileURL(file).href)
+  const displayFile = join(dir, 'display.mjs')
+  await writeFile(displayFile, ts.transpileModule(await readFile('src/lib/behavioralDisplay.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText)
+  const { behavioralQuestion, behavioralScoreSuffix, behavioralNoteLabel, BEHAVIORAL_AVERAGE_MAX } = await import(pathToFileURL(displayFile).href)
+  assert.equal(BEHAVIORAL_AVERAGE_MAX, 58 / 14)
+  for (const [col, label] of criteria) {
+    assert.notEqual(behavioralQuestion(`behavioral_${col}`, label, 'curriculum'), label)
+    assert.equal(behavioralScoreSuffix(`behavioral_${col}`), col === 28 ? ' / 6' : ' / 4')
+  }
+  assert.match(behavioralQuestion('behavioral_10', '', 'curriculum'), /curriculum track/)
+  assert.match(behavioralQuestion('behavioral_10', '', 'developer'), /community/)
+  assert.equal(behavioralNoteLabel('Question 3a Notes', 'developer'), behavioralQuestion('behavioral_10', '', 'developer'))
+  assert.match(behavioralNoteLabel('Question 4c Comments'), /difficult team member/)
+  assert.equal(behavioralNoteLabel('Comments/Additional Details'), 'Comments/Additional Details')
+  assert.equal(behavioralScoreSuffix('unknown'), '')
+  assert.equal(behavioralQuestion('unknown', 'Unmapped question'), 'Unmapped question')
   const csv = rows => [headers, ...rows].map(row => row.map(x => JSON.stringify(String(x))).join(',')).join('\n')
   const row = (name = 'RJ', email = 'one@example.com', rating = 4, fit = 6, time = '9/8/2026 13:00:00') => {
     const r = Array(30).fill(''); r[0] = time; r[1] = email; r[2] = '999'; r[3] = email; r[4] = name
