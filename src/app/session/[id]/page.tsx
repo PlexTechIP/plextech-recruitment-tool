@@ -8,7 +8,7 @@ import { Session, Candidate, Vote, VoteType, CandidateNote, GraderReview, Coffee
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
 import BehavioralSyncPanel from '@/components/BehavioralSyncPanel'
-import { BEHAVIORAL_AVERAGE_MAX, behavioralQuestion, behavioralScoreSuffix, behavioralNoteLabel } from '@/lib/behavioralDisplay'
+import { behavioralNoteLabel } from '@/lib/behavioralDisplay'
 
 const STATUS_COLORS: Record<string, string> = {
   accepted: 'bg-green-500',
@@ -500,7 +500,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   return (
     <div className="deliberation-portal h-screen bg-[var(--bg-base)] flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex items-center justify-between shrink-0">
+      <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex flex-wrap gap-3 items-center justify-between shrink-0">
         <div className="min-w-0 flex items-center gap-3">
           <Image
             src="/PlexTechLogo.png"
@@ -526,7 +526,6 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-sm text-[var(--text-muted)] hidden sm:block">{myName}</span>
           {isAdmin && (
             <button
               onClick={() => bulkMode ? exitBulkMode() : setBulkMode(true)}
@@ -557,6 +556,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             </button>
           </div>
           <ThemeToggle />
+          <details className="relative">
+            <summary className="cursor-pointer rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-muted)]">Account</summary>
+            <div className="absolute right-0 top-full z-50 mt-2 w-56 space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg-surface)] p-3 shadow-lg">
+              <p className="break-words text-xs text-[var(--text-muted)]">{myName}</p>
           <button onClick={handleLeaveSession}
             className="text-xs text-[var(--text-muted)] hover:text-red-400 border border-[var(--border)] hover:border-red-900/60 px-2 py-1.5 rounded-lg transition-colors">
             Leave
@@ -565,22 +568,34 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border)] px-2 py-1.5 rounded-lg transition-colors">
             Sign out
           </button>
+            </div>
+          </details>
         </div>
       </header>
 
-      <BehavioralSyncPanel sessionId={sessionId} admin={authSession?.user?.role === 'admin'} />
-      <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm space-y-2">
+      {focused && <div className="shrink-0 flex flex-wrap items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm">
+        <button className="text-[#FF6B35] hover:underline" onClick={() => { setSelectedId(focused.id); setViewMode('candidate'); setFilterStatus('all'); setSearch('') }}>Currently discussing: {focused.name} — return to focus</button>
+        {authSession?.user?.role === 'admin' && session.status === 'active' && <button className="ml-auto text-xs text-[var(--text-muted)]" disabled={controlBusy} onClick={() => void updateControl({ action: 'focus', candidate_id: null })}>Clear focus</button>}
+      </div>}
+      <div className="shrink-0 max-h-[40vh] overflow-y-auto border-b border-[var(--border)] bg-[var(--bg-surface)]">
+      <details>
+        <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--text-secondary)]">Session controls · {session.one_vouch_per_member ? '1 vouch per member' : 'Unlimited vouches'}</summary>
+        <BehavioralSyncPanel sessionId={sessionId} admin={authSession?.user?.role === 'admin'} />
+      <div className="px-4 py-2 text-sm space-y-2">
         <div className="flex flex-wrap items-center gap-3">
           <span>{session.one_vouch_per_member ? 'One vouch per member · remove it to choose someone else' : 'Vouches: no session-wide limit'}</span>
-          {focused && <button className="text-[#FF6B35] underline" onClick={() => { setSelectedId(focused.id); setViewMode('candidate'); setFilterStatus('all'); setSearch('') }}>Currently discussing: {focused.name} — return to focus</button>}
           {authSession?.user?.role === 'admin' && session.status === 'active' && <>
             <label className="flex items-center gap-2"><input type="checkbox" checked={!!session.one_vouch_per_member} disabled={controlBusy} onChange={e => void updateControl({ action: 'vouch-limit', enabled: e.target.checked })} />Limit to 1 vouch per member</label>
-            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={controlBusy || !selectedId} onClick={() => void updateControl({ action: 'focus', candidate_id: selectedId })}>Focus selected applicant for everyone</button>
-            {focused && <button className="rounded border px-3 py-1" disabled={controlBusy} onClick={() => void updateControl({ action: 'focus', candidate_id: null })}>Clear focus</button>}
           </>}
         </div>
-        {controlError && <p role="alert" className="text-red-600">{controlError}</p>}
       </div>
+      </details>
+      <details>
+        <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--text-secondary)]">Stats · {candidates.length} applicants · {candidates.filter(c => c.status === 'accepted').length} accepted</summary>
+        <GenderRatio candidates={candidates} />
+      </details>
+      </div>
+      {controlError && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-red-600">{controlError}</p>}
       {isAdmin && bulkMode && (
         <div className="shrink-0 flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2">
           <span className="mr-1 text-sm font-medium text-[var(--text-primary)]">
@@ -609,7 +624,6 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         </div>
       )}
 
-      <GenderRatio candidates={candidates} />
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
@@ -735,7 +749,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                       </div>
                       <div className="flex items-center gap-2 mt-1 ml-4">
                         {c.data.score != null && (
-                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(2)}{isInterviewData(c.data.interview) && c.data.interview.format === 'behavioral_fa26' ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : ''}</span>
+                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(2)}</span>
                         )}
                         {c.data.Scores != null && c.data.score == null && (
                           <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
@@ -763,6 +777,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
               key={selected.id}
               candidate={selected}
               role={session.role}
+              onFocus={authSession?.user?.role === 'admin' && session.status === 'active' ? () => void updateControl({ action: 'focus', candidate_id: selected.id }) : undefined}
+              focusBusy={controlBusy}
               votes={votesFor(selected.id)}
               myName={myName}
               isAdmin={isAdmin}
@@ -887,7 +903,7 @@ function ListView({
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right text-[var(--text-muted)] font-mono">
-                    {score != null ? Number(score).toFixed(2) : '—'}{score != null && isInterviewData(c.data.interview) && c.data.interview.format === 'behavioral_fa26' ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : ''}
+                    {score != null ? Number(score).toFixed(2) : '—'}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {vouches > 0 ? <span className="text-green-500 font-medium">{vouches}</span> : <span className="text-[var(--text-muted)]">—</span>}
@@ -912,10 +928,12 @@ function ListView({
 }
 
 function CandidateDetail({
-  candidate, role, votes, myName, isAdmin, anonymous, sessionActive, myVote, onVote, onStatusChange,
+  candidate, role, onFocus, focusBusy, votes, myName, isAdmin, anonymous, sessionActive, myVote, onVote, onStatusChange,
 }: {
   candidate: Candidate
   role: Session['role']
+  onFocus?: () => void
+  focusBusy: boolean
   votes: Vote[]
   myName: string
   isAdmin: boolean
@@ -1046,9 +1064,10 @@ function CandidateDetail({
     <div className="p-6 max-w-2xl">
       {/* Name + status */}
       <div className="flex items-start justify-between gap-4 mb-6">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 className="truncate text-2xl font-bold text-[var(--text-primary)]">{candidate.name}</h2>
           <GenderBadge gender={candidate.data?.gender} />
+          {onFocus && <button onClick={onFocus} disabled={focusBusy} className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[#FF6B35] disabled:opacity-40" title="Show this applicant to everyone in the session">Focus everyone</button>}
         </div>
         <span className={`shrink-0 text-xs px-2.5 py-1 rounded-full font-medium border ${STATUS_BADGE[candidate.status]}`}>
           {candidate.status}
@@ -1556,7 +1575,6 @@ function isInterviewData(value: unknown): value is InterviewData {
 function InterviewDetails({ value, role }: { value: unknown; role: Session['role'] }) {
   if (!isInterviewData(value)) return null
   const behavioral = value.format === 'behavioral_fa26'
-  const scoreSuffix = behavioral ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : value.format === 'developer_fa26' ? ' / 7' : ' / 19'
   return (
     <div className="mb-6 overflow-hidden rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5">
       <div className="space-y-3 px-4 py-3">
@@ -1571,17 +1589,17 @@ function InterviewDetails({ value, role }: { value: unknown; role: Session['role
           <div className="rounded-lg border border-[#FF6B35]/25 bg-[var(--bg-raised)] px-3 py-2 text-right">
             <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{behavioral ? 'Behavioral average' : 'Overall score'}</p>
             <p className="font-mono text-lg font-semibold text-[#FF6B35]">
-              {value.overall_score === null ? (behavioral ? 'Awaiting behavioral scores' : '—') : value.overall_score.toFixed(2)}{value.overall_score === null ? '' : scoreSuffix}
+              {value.overall_score === null ? (behavioral ? 'Awaiting behavioral scores' : '—') : value.overall_score.toFixed(2)}
             </p>
           </div>
         </div>
-        {behavioral && <p className="text-xs text-[var(--text-muted)]">Raw average of 14 ratings: 13 out of 4 and overall fit out of 6. Maximum average: 58 ÷ 14 ≈ 4.14. Higher is better.</p>}
+        {behavioral && <p className="text-xs text-[var(--text-muted)]">Behavioral average is out of 4.14: (13 × 4 + 6) ÷ 14 ≈ 4.14. Each interviewer’s 14 ratings are averaged, then interviewers are averaged equally.</p>}
         {value.criterion_averages.length > 0 && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {value.criterion_averages.map(score => (
               <div key={score.key} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-2.5">
                 <p className="truncate text-[10px] text-[var(--text-muted)]" title={score.label}>{score.label}</p>
-                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}{behavioral ? behavioralScoreSuffix(score.key) : ''}</p>
+                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}</p>
               </div>
             ))}
           </div>
@@ -1599,11 +1617,11 @@ function InterviewDetails({ value, role }: { value: unknown; role: Session['role
                 {behavioral && <p className="text-xs text-[var(--text-muted)]">{record.timestamp} · {record.counted ? 'Included in average' : record.complete ? 'Earlier response (not counted)' : 'Incomplete (not counted)'}</p>}
               </summary>
               {record.scores.length > 0 && (
-                <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {record.scores.map(score => (
                     <div key={score.key} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-2">
-                      <p className="text-xs leading-relaxed text-[var(--text-muted)]">{behavioral ? behavioralQuestion(score.key, score.label, role) : score.label}</p>
-                      <p className="text-sm font-medium text-[var(--text-primary)]">{score.raw}{behavioral ? behavioralScoreSuffix(score.key) : ''}</p>
+                      <p className="text-[10px] text-[var(--text-muted)]">{score.label}</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">{score.raw}</p>
                     </div>
                   ))}
                 </div>
