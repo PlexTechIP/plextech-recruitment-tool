@@ -1577,10 +1577,10 @@ function InterviewDetails({ value, role }: { value: unknown; role: Session['role
         </div>
         {behavioral && <p className="text-xs text-[var(--text-muted)]">Raw average of 14 ratings: 13 out of 4 and overall fit out of 6. Maximum average: 58 ÷ 14 ≈ 4.14. Higher is better.</p>}
         {value.criterion_averages.length > 0 && (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {value.criterion_averages.map(score => (
               <div key={score.key} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-2.5">
-                <p className="whitespace-normal text-xs leading-relaxed text-[var(--text-muted)]">{behavioral ? behavioralQuestion(score.key, score.label, role) : score.label}</p>
+                <p className="truncate text-[10px] text-[var(--text-muted)]" title={score.label}>{score.label}</p>
                 <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}{behavioral ? behavioralScoreSuffix(score.key) : ''}</p>
               </div>
             ))}
