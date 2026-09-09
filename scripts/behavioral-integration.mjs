@@ -102,6 +102,24 @@ try {
     assert.equal((await vote(extra._id)).status, 201)
     assert.equal((await control({ action: 'vouch-limit', enabled: true })).status, 409)
     assert.equal(await models.Vote.countDocuments({ voter_email: 'admin@example.com', vote_type: 'vouch' }), 2)
+    // A bounded 40-viewer burst against this script's disposable DB only.
+    await control({ action: 'vouch-limit', enabled: false })
+    const viewers = Array.from({ length: 40 }, (_, i) => `viewer-${i}@example.com`)
+    await models.SessionMember.insertMany(viewers.map(user_email => ({ session_id: sessionId, user_email })))
+    const voteUrl = `http://localhost:5192/api/votes?candidate_ids=${target._id},${extra._id}`
+    await fetch(voteUrl, { headers: headersFor('admin') }) // warm route compilation
+    const timings = []
+    const measured = async (url, options) => { const start = performance.now(); const r = await fetch(url, options); const body = await r.json(); timings.push(performance.now() - start); assert.ok(r.ok, `${r.status}: ${JSON.stringify(body)}`); return body }
+    await Promise.all(viewers.map(email => measured('http://localhost:5192/api/votes', { method: 'POST', headers: headersFor('grader', email), body: JSON.stringify({ candidate_id: String(target._id), vote_type: 'vouch', voter_name: email }) })))
+    assert.equal(await models.Vote.countDocuments({ candidate_id: target._id, voter_email: mongoose.trusted({ $in: viewers }) }), 40)
+    for (let wave = 0; wave < 3; wave++) await Promise.all(viewers.map(async email => {
+      const result = await measured(voteUrl, { headers: headersFor('grader', email) })
+      assert.equal(result.filter(v => v.vote_type === 'vouch').length, 42)
+      assert.equal(result.filter(v => v.voter_email === email).length, 1)
+      assert.ok(result.every(v => v.voter_email === null || v.voter_email === email))
+    }))
+    const sorted = timings.sort((a, b) => a - b)
+    console.log(JSON.stringify({ test: '40 concurrent viewers; 40 writes + 120 reads', requests: sorted.length, errors: 0, p95_ms: Math.round(sorted[Math.ceil(sorted.length * .95) - 1]), max_ms: Math.round(sorted.at(-1)) }))
     await Session.updateOne({ _id: sessionId }, { $set: { status: 'ended' } })
     assert.equal((await control({ action: 'focus', candidate_id: String(target._id) })).status, 409)
     console.log('Session controls checks passed: admin/member restrictions, cross-session focus rejection, focus revisions/clear, class year, concurrent one-vouch cap, removal/reuse, non-destructive enable and ended session.')
