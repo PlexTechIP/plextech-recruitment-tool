@@ -107,13 +107,19 @@ try {
     const viewers = Array.from({ length: 40 }, (_, i) => `viewer-${i}@example.com`)
     await models.SessionMember.insertMany(viewers.map(user_email => ({ session_id: sessionId, user_email })))
     const voteUrl = `http://localhost:5192/api/votes?candidate_ids=${target._id},${extra._id}`
+    const liveUrl = `http://localhost:5192/api/sessions/${sessionId}/live`
+    assert.equal((await fetch(liveUrl)).status, 401)
+    assert.equal((await fetch(liveUrl, { headers: headersFor('grader', 'outsider@example.com') })).status, 403)
     await fetch(voteUrl, { headers: headersFor('admin') }) // warm route compilation
     const timings = []
     const measured = async (url, options) => { const start = performance.now(); const r = await fetch(url, options); const body = await r.json(); timings.push(performance.now() - start); assert.ok(r.ok, `${r.status}: ${JSON.stringify(body)}`); return body }
     await Promise.all(viewers.map(email => measured('http://localhost:5192/api/votes', { method: 'POST', headers: headersFor('grader', email), body: JSON.stringify({ candidate_id: String(target._id), vote_type: 'vouch', voter_name: email }) })))
     assert.equal(await models.Vote.countDocuments({ candidate_id: target._id, voter_email: mongoose.trusted({ $in: viewers }) }), 40)
     for (let wave = 0; wave < 3; wave++) await Promise.all(viewers.map(async email => {
-      const result = await measured(voteUrl, { headers: headersFor('grader', email) })
+      const snapshot = await measured(liveUrl, { headers: headersFor('grader', email) })
+      assert.ok(snapshot.candidates.every(c => Object.keys(c).every(k => k === 'id' || k === 'status')))
+      assert.equal(snapshot.session.status, 'active')
+      const result = snapshot.votes
       assert.equal(result.filter(v => v.vote_type === 'vouch').length, 42)
       assert.equal(result.filter(v => v.voter_email === email).length, 1)
       assert.ok(result.every(v => v.voter_email === null || v.voter_email === email))
