@@ -146,6 +146,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const refreshInFlight = useRef(false)
+  const voteReadInFlight = useRef(false)
+  const voteWriteInFlight = useRef(false)
+  const voteRevision = useRef(0)
+  const voteCandidateIds = useRef<string[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const seenFocus = useRef({ session: '', version: -1 })
   const [controlBusy, setControlBusy] = useState(false)
@@ -171,6 +175,23 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const userName = authSession?.user?.name ?? userEmail
 
   const isAdmin = !!userEmail && !!session && userEmail === session.created_by
+
+  const loadVotes = useCallback(async () => {
+    if (voteReadInFlight.current || voteWriteInFlight.current) return
+    const ids = voteCandidateIds.current
+    if (!ids.length) return
+    voteReadInFlight.current = true
+    const revision = voteRevision.current
+    try {
+      const batches = await Promise.all(Array.from({ length: Math.ceil(ids.length / VOTE_FETCH_BATCH_SIZE) }, (_, i) =>
+        fetch(`/api/votes?candidate_ids=${ids.slice(i * VOTE_FETCH_BATCH_SIZE, (i + 1) * VOTE_FETCH_BATCH_SIZE).join(',')}`, { signal: AbortSignal.timeout(10000), cache: 'no-store' })
+          .then(async response => { if (!response.ok) throw new Error('Vote refresh failed'); return response.json() as Promise<Vote[]> }),
+      ))
+      // A read started before a successful mutation must not undo its UI update.
+      if (revision === voteRevision.current && !voteWriteInFlight.current) setVotes(batches.flat())
+    } catch { /* Retain the previous votes; retry on the next lightweight poll. */ }
+    finally { voteReadInFlight.current = false }
+  }, [])
 
   const loadData = useCallback(async () => {
     if (refreshInFlight.current) return
@@ -235,35 +256,20 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       }
     }
     setCandidates(cands)
+    voteCandidateIds.current = cands.map(c => c.id)
     setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
     setLoading(false)
     setLoadError(null)
 
-    if (cands.length > 0) {
-      const candidateIds = cands.map((c: Candidate) => c.id)
-      const voteResponses = await Promise.all(
-        Array.from(
-          { length: Math.ceil(candidateIds.length / VOTE_FETCH_BATCH_SIZE) },
-          (_, index) => candidateIds.slice(
-            index * VOTE_FETCH_BATCH_SIZE,
-            (index + 1) * VOTE_FETCH_BATCH_SIZE,
-          ),
-        ).map(ids => read(`/api/votes?candidate_ids=${ids.join(',')}`)),
-      )
-      if (voteResponses.every(response => response.ok)) {
-        const voteBatches = await Promise.all(voteResponses.map(response => response.json()))
-        setVotes(voteBatches.flat())
-      }
-    } else {
-      setVotes([])
-    }
+    if (cands.length) void loadVotes()
+    else setVotes([])
     } catch {
       setLoadError('Loading is taking longer than expected. Your saved data is unchanged. Please retry.')
     } finally {
       refreshInFlight.current = false
       setLoading(false)
     }
-  }, [sessionId])
+  }, [sessionId, loadVotes])
 
   useEffect(() => {
     if (authStatus === 'loading') return
@@ -271,6 +277,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 
     let cancelled = false
     let interval: ReturnType<typeof setInterval> | undefined
+    let voteInterval: ReturnType<typeof setInterval> | undefined
 
     // Join before the first protected read. Previously these ran concurrently,
     // causing intermittent 403s on a user's first visit.
@@ -296,19 +303,23 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       await loadData()
       if (cancelled) return
       setLoading(false)
-      // Skip background tabs and use an 8-second refresh. User actions still
-      // refresh immediately, while this avoids a constant 3-second fan-out.
+      // Heavy data refreshes are slower; votes have their own lightweight poll.
+      // Jitter spreads viewers' requests instead of synchronized bursts.
       interval = setInterval(() => {
         if (document.visibilityState === 'visible') void loadData()
-      }, 8000)
+      }, 12000 + Math.random() * 2000)
+      voteInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') void loadVotes()
+      }, 2000 + Math.random() * 1000)
     }
 
     void bootstrap()
     return () => {
       cancelled = true
       if (interval) clearInterval(interval)
+      if (voteInterval) clearInterval(voteInterval)
     }
-  }, [authStatus, sessionId, router, loadData])
+  }, [authStatus, sessionId, router, loadData, loadVotes])
 
   const selected = candidates.find(candidate => candidate.id === selectedId) ?? null
   const focused = candidates.find(candidate => candidate.id === session?.focused_candidate_id)
@@ -330,19 +341,23 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     v.voter_email ? v.voter_email === userEmail.toLowerCase() : v.voter_name === userName
 
   async function handleVote(candidateId: string, voteType: VoteType) {
-    if (!userEmail) return
+    if (!userEmail || voteWriteInFlight.current) return
+    voteWriteInFlight.current = true
+    voteRevision.current++
+    try {
     const voterName = userName
     const existing = votes.find(v => v.candidate_id === candidateId && isMyVote(v) && v.vote_type === voteType)
     if (existing) {
       const res = await fetch('/api/votes', {
         method: 'DELETE',
+        signal: AbortSignal.timeout(15000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: existing.id }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         alert(`Could not remove vote: ${err?.error ?? res.statusText}`)
-      }
+      } else setVotes(current => current.filter(v => v.id !== existing.id))
     } else {
       if (voteType === 'vouch' && session?.one_vouch_per_member && votes.some(v => v.vote_type === 'vouch' && isMyVote(v))) {
         alert('One vouch per member is enabled. Remove your current vouch before choosing another applicant.')
@@ -353,24 +368,36 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       if (opposite) {
         const oppositeVote = votes.find(v => v.candidate_id === candidateId && isMyVote(v) && v.vote_type === opposite)
         if (oppositeVote) {
-          await fetch('/api/votes', {
+          const removed = await fetch('/api/votes', {
             method: 'DELETE',
+            signal: AbortSignal.timeout(15000),
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: oppositeVote.id }),
           })
+          if (!removed.ok) throw new Error('Could not remove your previous vote. Please retry.')
+          setVotes(current => current.filter(v => v.id !== oppositeVote.id))
         }
       }
       const res = await fetch('/api/votes', {
         method: 'POST',
+        signal: AbortSignal.timeout(15000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ candidate_id: candidateId, voter_name: voterName, vote_type: voteType }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
         alert(`Could not vote: ${err?.error ?? res.statusText}`)
+      } else {
+        const created = await res.json()
+        setVotes(current => [...current.filter(v => v.id !== created.id), { id: created.id, candidate_id: candidateId, voter_name: voterName, voter_email: userEmail.toLowerCase(), vote_type: voteType }])
       }
     }
-    await loadData()
+    } catch { alert('Unable to update your vote. Please retry.') }
+    finally {
+      voteRevision.current++
+      voteWriteInFlight.current = false
+      void loadVotes()
+    }
   }
 
   async function handleStatusChange(candidateId: string, status: string) {
