@@ -59,9 +59,17 @@ export function parseBehavioralCsv(csv: string): BehavioralRecord[] {
 }
 
 export function aggregateBehavioral(records: BehavioralRecord[]) {
+  // Admin-confirmed FA26 correction: these two placeholder no-show reports
+  // preceded Diya's completed interview. Retain the source notes and ratings
+  // for reference, but never count them again on automatic resync.
+  const excluded = (r: BehavioralRecord) =>
+    ['diya vatsavai', 'diya vatasavai'].includes(normalizeBehavioralName(r.source_name)) &&
+    ['carlychvn@berkeley.edu', 'davyn@berkeley.edu'].includes(r.interviewer_key) &&
+    r.scores.length === 14 && r.scores.every(s => s.value === 1) &&
+    r.responses.length > 0 && r.responses.every(n => normalizeBehavioralName(n.value) === 'no show')
   const latest = new Map<string, BehavioralRecord>()
   for (const r of [...records].sort((a, b) => a.timestamp_order - b.timestamp_order || a.source_row - b.source_row)) latest.set(r.interviewer_key, r)
-  const included = [...latest.values()].filter(r => r.complete)
+  const included = [...latest.values()].filter(r => r.complete && !excluded(r))
   return {
     format: 'behavioral_fa26' as const,
     interviewers: [...new Set(records.map(r => r.interviewer))],
@@ -70,7 +78,7 @@ export function aggregateBehavioral(records: BehavioralRecord[]) {
       return value === null ? [] : [{ key: `behavioral_${col}`, label, value }]
     }),
     overall_score: mean(included.map(r => mean(r.scores.map(s => s.value))!)),
-    records: records.map(r => ({ ...r, counted: latest.get(r.interviewer_key) === r && r.complete })),
+    records: records.map(r => ({ ...r, counted: latest.get(r.interviewer_key) === r && r.complete && !excluded(r) })),
     source_names: [...new Set(records.map(r => r.source_name))],
   }
 }

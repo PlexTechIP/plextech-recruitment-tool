@@ -179,6 +179,7 @@ const SessionSchema = new Schema({
   created_by: { type: String, required: true, lowercase: true, trim: true },
   anonymous:  { type: Boolean, default: false },
   one_vouch_per_member: { type: Boolean, default: false },
+  show_vouch_counts: { type: Boolean, default: true },
   focused_candidate_id: { type: Schema.Types.ObjectId, ref: 'Candidate', default: null },
   focus_version: { type: Number, default: 0 },
   role:       { type: String, enum: ['curriculum', 'developer', null], default: null },

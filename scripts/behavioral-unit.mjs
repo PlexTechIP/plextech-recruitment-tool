@@ -37,6 +37,22 @@ try {
   assert.equal(result.records[0].scores.length, 14)
   assert.equal(result.records[0].responses[0].value, 'Question two narrative')
   assert.equal(result.criterion_averages.at(-1).value, 5.5)
+  const placeholder = email => {
+    const r = row('Diya Vatsavai', email, 1, 1)
+    for (const i of [5,7,9,11,13,15,17,19,21,23,29]) r[i] = 'no show'
+    return r
+  }
+  const lucas = row('Diya Vatsavai', 'lucasjohansson@berkeley.edu')
+  const preston = row('Diya Vatasavai', 'patjandra@berkeley.edu', 3, 4)
+  const ratings = [1,1,2,4,4,4,4,2,3,3,3,4,4,5]
+  criteria.forEach(([col], i) => { lucas[col] = ratings[i] })
+  const corrected = aggregate(parse(csv([placeholder('carlychvn@berkeley.edu'), placeholder('davyn@berkeley.edu'), lucas, preston])))
+  assert.equal(corrected.overall_score, (44 / 14 + 43 / 14) / 2)
+  assert.equal(corrected.records.length, 4)
+  assert.deepEqual(corrected.records.map(r => r.counted), [false, false, true, true])
+  assert.equal(corrected.records[0].responses[0].value, 'no show')
+  const otherApplicant = placeholder('carlychvn@berkeley.edu'); otherApplicant[4] = 'Other Applicant'
+  assert.equal(aggregate(parse(csv([otherApplicant]))).overall_score, 1)
   const later = row('RJ', 'one@example.com', 1, 1, '9/8/2026 14:00:00')
   const revised = aggregate(parse(csv([row(), later])))
   assert.equal(revised.overall_score, 1); assert.equal(revised.records[0].counted, false)

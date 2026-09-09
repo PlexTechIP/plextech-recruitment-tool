@@ -16,6 +16,7 @@ export interface Session {
   created_by: string
   anonymous: boolean
   one_vouch_per_member?: boolean
+  show_vouch_counts?: boolean
   focused_candidate_id?: string | null
   focus_version?: number
   role: ApplicantRole | null

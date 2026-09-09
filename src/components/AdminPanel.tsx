@@ -8,9 +8,10 @@ interface Props {
   session: Session
   sessionId: string
   onRefresh: () => void
+  onVouchesReset: () => void
 }
 
-export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
+export default function AdminPanel({ session, sessionId, onRefresh, onVouchesReset }: Props) {
   const [tab, setTab] = useState<'session' | 'members' | 'emails'>('session')
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
@@ -303,6 +304,7 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
   }
 
   async function handleResetVouches() {
+    if (resettingVouches) return
     if (!confirm('Reset all vouches and anti-vouches in this session? Red flags will remain. This cannot be undone.')) return
     setResettingVouches(true)
     setResetVouchesStatus('')
@@ -311,6 +313,7 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId }),
+        signal: AbortSignal.timeout(30000),
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -319,9 +322,9 @@ export default function AdminPanel({ session, sessionId, onRefresh }: Props) {
       }
       const deletedCount = Number(body?.deleted_count ?? 0)
       setResetVouchesStatus(`Reset ${deletedCount} vouch${deletedCount === 1 ? '' : 'es'} and anti-vouches. Red flags were kept.`)
-      await onRefresh()
+      onVouchesReset()
     } catch {
-      setResetVouchesStatus('Unable to reset vouches. Check your connection and try again.')
+      setResetVouchesStatus('Could not confirm the reset. Check the live counts before trying again.')
     } finally {
       setResettingVouches(false)
     }

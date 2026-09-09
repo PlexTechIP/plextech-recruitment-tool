@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Candidates must belong to one session.' }, { status: 400 })
   }
   const sessionId = sessionIds[0]
-  const session = await SessionModel.findById(sessionId).select('created_by anonymous').lean()
+  const session = await SessionModel.findById(sessionId).select('created_by anonymous show_vouch_counts').lean()
   if (!session) return NextResponse.json({ error: 'Session not found.' }, { status: 404 })
   const isCreator = session.created_by?.toLowerCase() === auth.email.toLowerCase()
   const [isMember, banned] = await Promise.all([
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   // Red flags are anonymous to everyone but the session creator. Redact on the
   // server so identities aren't recoverable from the network response. A user's
   // own flag is left intact so the UI can still show their toggle state.
-  return NextResponse.json(votes.map(v => {
+  return NextResponse.json(votes.filter(v => session.show_vouch_counts !== false || v.vote_type === 'red_flag' || v.voter_email?.toLowerCase() === auth.email).map(v => {
     const isMine = typeof v.voter_email === 'string' && v.voter_email.toLowerCase() === auth.email.toLowerCase()
     const base = {
       ...v,
