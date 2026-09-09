@@ -17,9 +17,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const parsed = await readJsonObject(req)
   if (!parsed.ok) return parsed.response
   const body = parsed.data
-  if (body.action !== 'focus' && body.action !== 'vouch-limit') return NextResponse.json({ error: 'Invalid action.' }, { status: 400 })
+  if (body.action !== 'focus' && body.action !== 'vouch-limit' && body.action !== 'vouch-visibility') return NextResponse.json({ error: 'Invalid action.' }, { status: 400 })
   if (body.action === 'focus' && body.candidate_id !== null && !isObjectId(body.candidate_id)) return NextResponse.json({ error: 'Invalid candidate.' }, { status: 400 })
-  if (body.action === 'vouch-limit' && typeof body.enabled !== 'boolean') return NextResponse.json({ error: 'Invalid limit.' }, { status: 400 })
+  if (body.action !== 'focus' && typeof body.enabled !== 'boolean') return NextResponse.json({ error: 'Invalid setting.' }, { status: 400 })
   await connectDB()
   try {
     await mongoose.connection.transaction(async tx => {
@@ -29,6 +29,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (body.action === 'focus') {
         if (body.candidate_id !== null && !await Candidate.exists({ _id: body.candidate_id, session_id: id }).session(tx)) throw new ControlError('Candidate does not belong to this session.', 400)
         await Session.updateOne({ _id: id }, { $set: { focused_candidate_id: body.candidate_id }, $inc: { focus_version: 1 } }, { session: tx })
+      } else if (body.action === 'vouch-visibility') {
+        await Session.updateOne({ _id: id }, { $set: { show_vouch_counts: body.enabled } }, { session: tx })
       } else {
         // Votes fence on their membership row. Touch all members so a vote
         // racing this setting change retries with the new rule.

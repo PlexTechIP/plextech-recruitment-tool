@@ -261,7 +261,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       }
     }
 
-    if (sessionData) setSession(current => current && liveAtStart !== liveRevision.current ? { ...sessionData, status: current.status, anonymous: current.anonymous, one_vouch_per_member: current.one_vouch_per_member, focused_candidate_id: current.focused_candidate_id, focus_version: current.focus_version } : sessionData)
+    if (sessionData) setSession(current => current && liveAtStart !== liveRevision.current ? { ...sessionData, status: current.status, anonymous: current.anonymous, show_vouch_counts: current.show_vouch_counts, one_vouch_per_member: current.one_vouch_per_member, focused_candidate_id: current.focused_candidate_id, focus_version: current.focus_version } : sessionData)
     if (sessionData && (seenFocus.current.session !== sessionId || (sessionData.focus_version ?? 0) > seenFocus.current.version)) {
       seenFocus.current = { session: sessionId, version: sessionData.focus_version ?? 0 }
       if (sessionData.focused_candidate_id && cands.some(c => c.id === sessionData.focused_candidate_id)) {
@@ -350,7 +350,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       const response = await fetch(`/api/sessions/${sessionId}/controls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Unable to update controls.')
-      await loadData()
+      await loadVotes()
     } catch (e) { setControlError(e instanceof Error ? e.message : 'Unable to update controls.') }
     finally { setControlBusy(false) }
   }
@@ -668,6 +668,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
           <span>{session.one_vouch_per_member ? 'One vouch per member · remove it to choose someone else' : 'Vouches: no session-wide limit'}</span>
           {authSession?.user?.role === 'admin' && session.status === 'active' && <>
             <label className="flex items-center gap-2"><input type="checkbox" checked={!!session.one_vouch_per_member} disabled={controlBusy} onChange={e => void updateControl({ action: 'vouch-limit', enabled: e.target.checked })} />Limit to 1 vouch per member</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={session.show_vouch_counts !== false} disabled={controlBusy} onChange={e => void updateControl({ action: 'vouch-visibility', enabled: e.target.checked })} />Show vouch and anti-vouch counts</label>
           </>}
         </div>
       </div>
@@ -713,6 +714,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         <ListView
           candidates={candidates}
           votes={votes}
+          showVouchCounts={session.show_vouch_counts !== false}
           bulkMode={isAdmin && bulkMode}
           selectedIds={selectedCandidateIds}
           onToggleSelection={toggleCandidateSelection}
@@ -759,7 +761,11 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                 <span className="text-gray-600 text-[10px]">{showAdminPanel ? '▲' : '▼'}</span>
               </button>
               {showAdminPanel && (
-                <AdminPanel session={session} sessionId={sessionId} onRefresh={loadData} />
+                <AdminPanel session={session} sessionId={sessionId} onRefresh={loadData} onVouchesReset={() => {
+                  voteRevision.current++
+                  setVotes(current => current.filter(v => v.vote_type !== 'vouch' && v.vote_type !== 'anti_vouch'))
+                  void loadVotes()
+                }} />
               )}
             </div>
           )}
@@ -836,8 +842,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                         {c.data.Scores != null && c.data.score == null && (
                           <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
                         )}
-                        {vouches > 0 && <span className="text-xs text-green-500">+{vouches}</span>}
-                        {antis > 0 && <span className="text-xs text-orange-500">-{antis}</span>}
+                        {session.show_vouch_counts !== false && vouches > 0 && <span className="text-xs text-green-500">+{vouches}</span>}
+                        {session.show_vouch_counts !== false && antis > 0 && <span className="text-xs text-orange-500">-{antis}</span>}
                         {flags > 0 && <span className="text-xs text-red-500">⚑{flags}</span>}
                       </div>
                     </button>
@@ -865,6 +871,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
               myName={myName}
               isAdmin={isAdmin}
               anonymous={session.anonymous}
+              showVouchCounts={session.show_vouch_counts !== false}
               sessionActive={session.status === 'active'}
               myVote={myVote}
               onVote={handleVote}
@@ -879,6 +886,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
 }
 
 function ListView({
+  showVouchCounts,
   candidates,
   votes,
   bulkMode,
@@ -887,6 +895,7 @@ function ListView({
   onSelect,
 }: {
   candidates: Candidate[]
+  showVouchCounts: boolean
   votes: Vote[]
   bulkMode: boolean
   selectedIds: Set<string>
@@ -988,10 +997,10 @@ function ListView({
                     {score != null ? Number(score).toFixed(2) : '—'}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    {vouches > 0 ? <span className="text-green-500 font-medium">{vouches}</span> : <span className="text-[var(--text-muted)]">—</span>}
+                    {!showVouchCounts ? 'Hidden' : vouches > 0 ? <span className="text-green-500 font-medium">{vouches}</span> : <span className="text-[var(--text-muted)]">—</span>}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    {antis > 0 ? <span className="text-orange-500 font-medium">{antis}</span> : <span className="text-[var(--text-muted)]">—</span>}
+                    {!showVouchCounts ? 'Hidden' : antis > 0 ? <span className="text-orange-500 font-medium">{antis}</span> : <span className="text-[var(--text-muted)]">—</span>}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {flags > 0 ? <span className="text-red-500 font-medium">{flags}</span> : <span className="text-[var(--text-muted)]">—</span>}
@@ -1010,9 +1019,11 @@ function ListView({
 }
 
 function CandidateDetail({
+  showVouchCounts,
   candidate, role, onFocus, focusBusy, votes, myName, isAdmin, anonymous, sessionActive, myVote, onVote, onStatusChange,
 }: {
   candidate: Candidate
+  showVouchCounts: boolean
   role: Session['role']
   onFocus?: () => void
   focusBusy: boolean
@@ -1379,13 +1390,14 @@ function CandidateDetail({
       {/* Votes summary */}
       {votes.length > 0 && (
         <div className="mb-6 space-y-3">
-          {vouches.length > 0 && (
+          {!showVouchCounts && <p className="text-xs text-[var(--text-muted)]">Vouch totals are hidden until the admin reveals them. Your vote still counts.</p>}
+          {showVouchCounts && vouches.length > 0 && (
             <div>
               <p className="text-xs font-medium text-green-400 mb-1">Vouches ({vouches.length})</p>
               <p className="text-sm text-[var(--text-secondary)]">{anonymous ? `${vouches.length} member(s)` : vouches.map(v => v.voter_name).join(', ')}</p>
             </div>
           )}
-          {antis.length > 0 && (
+          {showVouchCounts && antis.length > 0 && (
             <div>
               <p className="text-xs font-medium text-orange-400 mb-1">Anti-Vouches ({antis.length})</p>
               <p className="text-sm text-[var(--text-secondary)]">{anonymous ? `${antis.length} member(s)` : antis.map(v => v.voter_name).join(', ')}</p>
@@ -1696,7 +1708,7 @@ function InterviewDetails({ value, role }: { value: unknown; role: Session['role
             <details key={`${record.source_row}-${record.interviewer}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-3">
               <summary className="mb-3 cursor-pointer">
                 <p className="text-sm font-semibold text-[var(--text-primary)]">{record.interviewer}</p>
-                {behavioral && <p className="text-xs text-[var(--text-muted)]">{record.timestamp} · {record.counted ? 'Included in average' : record.complete ? 'Earlier response (not counted)' : 'Incomplete (not counted)'}</p>}
+                {behavioral && <p className="text-xs text-[var(--text-muted)]">{record.timestamp} · {record.counted ? 'Included in average' : record.complete ? 'Reference only (not counted)' : 'Incomplete (not counted)'}</p>}
               </summary>
               {record.scores.length > 0 && (
                 <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
