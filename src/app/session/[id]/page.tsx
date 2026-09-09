@@ -8,6 +8,7 @@ import { Session, Candidate, Vote, VoteType, CandidateNote, GraderReview, Coffee
 import AdminPanel from '@/components/AdminPanel'
 import ThemeToggle from '@/components/ThemeToggle'
 import BehavioralSyncPanel from '@/components/BehavioralSyncPanel'
+import { BEHAVIORAL_AVERAGE_MAX, behavioralQuestion, behavioralScoreSuffix, behavioralNoteLabel } from '@/lib/behavioralDisplay'
 
 const STATUS_COLORS: Record<string, string> = {
   accepted: 'bg-green-500',
@@ -734,7 +735,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
                       </div>
                       <div className="flex items-center gap-2 mt-1 ml-4">
                         {c.data.score != null && (
-                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(2)}</span>
+                          <span className="text-xs text-[var(--text-muted)]">{Number(c.data.score).toFixed(2)}{isInterviewData(c.data.interview) && c.data.interview.format === 'behavioral_fa26' ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : ''}</span>
                         )}
                         {c.data.Scores != null && c.data.score == null && (
                           <span className="text-xs text-[var(--text-muted)]">{Number(c.data.Scores).toFixed(1)}</span>
@@ -761,6 +762,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             <CandidateDetail
               key={selected.id}
               candidate={selected}
+              role={session.role}
               votes={votesFor(selected.id)}
               myName={myName}
               isAdmin={isAdmin}
@@ -885,7 +887,7 @@ function ListView({
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right text-[var(--text-muted)] font-mono">
-                    {score != null ? Number(score).toFixed(2) : '—'}
+                    {score != null ? Number(score).toFixed(2) : '—'}{score != null && isInterviewData(c.data.interview) && c.data.interview.format === 'behavioral_fa26' ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : ''}
                   </td>
                   <td className="px-4 py-3 text-center">
                     {vouches > 0 ? <span className="text-green-500 font-medium">{vouches}</span> : <span className="text-[var(--text-muted)]">—</span>}
@@ -910,9 +912,10 @@ function ListView({
 }
 
 function CandidateDetail({
-  candidate, votes, myName, isAdmin, anonymous, sessionActive, myVote, onVote, onStatusChange,
+  candidate, role, votes, myName, isAdmin, anonymous, sessionActive, myVote, onVote, onStatusChange,
 }: {
   candidate: Candidate
+  role: Session['role']
   votes: Vote[]
   myName: string
   isAdmin: boolean
@@ -1054,7 +1057,7 @@ function CandidateDetail({
 
       {/* Dynamic fields from data JSON */}
       <DataFields data={candidate.data} />
-      <InterviewDetails value={candidate.data?.interview} />
+      <InterviewDetails value={candidate.data?.interview} role={role} />
 
       {candidate.applicant_id && applicantInfo && (
         <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--bg-surface)] p-4">
@@ -1550,10 +1553,10 @@ function isInterviewData(value: unknown): value is InterviewData {
     && Array.isArray(record.records)
 }
 
-function InterviewDetails({ value }: { value: unknown }) {
+function InterviewDetails({ value, role }: { value: unknown; role: Session['role'] }) {
   if (!isInterviewData(value)) return null
   const behavioral = value.format === 'behavioral_fa26'
-  const scoreSuffix = behavioral ? '' : value.format === 'developer_fa26' ? ' / 7' : ' / 19'
+  const scoreSuffix = behavioral ? ` / ${BEHAVIORAL_AVERAGE_MAX.toFixed(2)}` : value.format === 'developer_fa26' ? ' / 7' : ' / 19'
   return (
     <div className="mb-6 overflow-hidden rounded-xl border border-[#FF6B35]/30 bg-[#FF6B35]/5">
       <div className="space-y-3 px-4 py-3">
@@ -1572,12 +1575,13 @@ function InterviewDetails({ value }: { value: unknown }) {
             </p>
           </div>
         </div>
+        {behavioral && <p className="text-xs text-[var(--text-muted)]">Raw average of 14 ratings: 13 out of 4 and overall fit out of 6. Maximum average: 58 ÷ 14 ≈ 4.14. Higher is better.</p>}
         {value.criterion_averages.length > 0 && (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {value.criterion_averages.map(score => (
               <div key={score.key} className="rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]/80 p-2.5">
-                <p className="truncate text-[10px] text-[var(--text-muted)]" title={score.label}>{score.label}</p>
-                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}</p>
+                <p className="whitespace-normal text-xs leading-relaxed text-[var(--text-muted)]">{behavioral ? behavioralQuestion(score.key, score.label, role) : score.label}</p>
+                <p className="font-mono text-sm font-semibold text-[var(--text-primary)]">{score.value.toFixed(2)}{behavioral ? behavioralScoreSuffix(score.key) : ''}</p>
               </div>
             ))}
           </div>
@@ -1595,11 +1599,11 @@ function InterviewDetails({ value }: { value: unknown }) {
                 {behavioral && <p className="text-xs text-[var(--text-muted)]">{record.timestamp} · {record.counted ? 'Included in average' : record.complete ? 'Earlier response (not counted)' : 'Incomplete (not counted)'}</p>}
               </summary>
               {record.scores.length > 0 && (
-                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {record.scores.map(score => (
                     <div key={score.key} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-2.5 py-2">
-                      <p className="text-[10px] text-[var(--text-muted)]">{score.label}</p>
-                      <p className="text-sm font-medium text-[var(--text-primary)]">{score.raw}</p>
+                      <p className="text-xs leading-relaxed text-[var(--text-muted)]">{behavioral ? behavioralQuestion(score.key, score.label, role) : score.label}</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">{score.raw}{behavioral ? behavioralScoreSuffix(score.key) : ''}</p>
                     </div>
                   ))}
                 </div>
@@ -1608,7 +1612,7 @@ function InterviewDetails({ value }: { value: unknown }) {
                 <div className="space-y-2">
                   {record.responses.map((response, index) => (
                     <details key={`${response.label}-${index}`} className="rounded-md border border-[var(--border)] bg-[var(--bg-surface)]">
-                      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-[var(--text-secondary)]">{response.label}</summary>
+                      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-[var(--text-secondary)]">{behavioral ? behavioralNoteLabel(response.label, role) : response.label}</summary>
                       <p className="whitespace-pre-wrap break-words px-3 pb-3 text-sm text-[var(--text-primary)]">{response.value}</p>
                     </details>
                   ))}
