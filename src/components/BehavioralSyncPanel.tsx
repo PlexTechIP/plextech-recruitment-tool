@@ -23,7 +23,7 @@ export default function BehavioralSyncPanel({ cycleId, sessionId, rounds = [], a
   useEffect(() => {
     const refresh = () => { void load().catch(() => {}) }
     const initial = setTimeout(refresh, 0)
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 8000)
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 30000)
     return () => { clearTimeout(initial); clearInterval(timer) }
   }, [load])
 

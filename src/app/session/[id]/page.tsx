@@ -144,6 +144,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [votes, setVotes] = useState<Vote[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const refreshInFlight = useRef(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const seenFocus = useRef({ session: '', version: -1 })
   const [controlBusy, setControlBusy] = useState(false)
@@ -171,14 +173,19 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const isAdmin = !!userEmail && !!session && userEmail === session.created_by
 
   const loadData = useCallback(async () => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
+    try {
+    const read = (url: string) => fetch(url, { signal: AbortSignal.timeout(15000) })
     const [sessionRes, candidatesRes, membersRes] = await Promise.all([
-      fetch(`/api/sessions/${sessionId}`),
-      fetch(`/api/sessions/${sessionId}/candidates`),
-      fetch(`/api/session-members?session_id=${sessionId}`),
+      read(`/api/sessions/${sessionId}`),
+      read(`/api/sessions/${sessionId}/candidates`),
+      read(`/api/session-members?session_id=${sessionId}`),
     ])
 
     // 403 from the session endpoint means this user has been banned.
     if (sessionRes.status === 403) { setBanned(true); return }
+    if (!sessionRes.ok || !candidatesRes.ok || !membersRes.ok) throw new Error('Unable to refresh session data. Please retry.')
     const sessionData = sessionRes.ok ? await sessionRes.json() : null
     const rawCands: Candidate[] = candidatesRes.ok ? await candidatesRes.json() : []
     const membersData = membersRes.ok ? await membersRes.json() : []
@@ -189,8 +196,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     }))
 
     // Merge grader review scores if this session is linked to a round
-    if (sessionData?.round_id && cands.some(c => c.applicant_id)) {
-      const statsRes = await fetch(`/api/admin/grading-stats?round_id=${sessionData.round_id}`)
+    if (sessionData?.round_id && cands.some(c => c.applicant_id && !c.data?.interview)) {
+      const statsRes = await read(`/api/admin/grading-stats?round_id=${sessionData.round_id}`)
       if (statsRes.ok) {
         const stats = await statsRes.json()
         type StatRow = {
@@ -229,6 +236,8 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     }
     setCandidates(cands)
     setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
+    setLoading(false)
+    setLoadError(null)
 
     if (cands.length > 0) {
       const candidateIds = cands.map((c: Candidate) => c.id)
@@ -239,7 +248,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
             index * VOTE_FETCH_BATCH_SIZE,
             (index + 1) * VOTE_FETCH_BATCH_SIZE,
           ),
-        ).map(ids => fetch(`/api/votes?candidate_ids=${ids.join(',')}`)),
+        ).map(ids => read(`/api/votes?candidate_ids=${ids.join(',')}`)),
       )
       if (voteResponses.every(response => response.ok)) {
         const voteBatches = await Promise.all(voteResponses.map(response => response.json()))
@@ -247,6 +256,12 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       }
     } else {
       setVotes([])
+    }
+    } catch {
+      setLoadError('Loading is taking longer than expected. Your saved data is unchanged. Please retry.')
+    } finally {
+      refreshInFlight.current = false
+      setLoading(false)
     }
   }, [sessionId])
 
@@ -261,6 +276,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     // causing intermittent 403s on a user's first visit.
     async function bootstrap() {
       const joinResponse = await fetch('/api/session-members', {
+        signal: AbortSignal.timeout(15000),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId }),
@@ -268,6 +284,11 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       if (cancelled) return
       if (joinResponse?.status === 403) {
         setBanned(true)
+        setLoading(false)
+        return
+      }
+      if (!joinResponse?.ok) {
+        setLoadError('Unable to join the session. Please retry.')
         setLoading(false)
         return
       }
@@ -472,7 +493,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     )
   }
   if (!session) {
-    return <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center"><div className="text-red-400">Session not found.</div></div>
+    return <div className="min-h-screen bg-[var(--bg-base)] flex flex-col gap-3 items-center justify-center"><div className="text-red-400">{loadError ?? 'Session not found.'}</div><button className="rounded border px-4 py-2" onClick={() => window.location.reload()}>Retry loading</button></div>
   }
 
   const myName = userName
@@ -500,6 +521,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   return (
     <div className="deliberation-portal h-screen bg-[var(--bg-base)] flex flex-col overflow-hidden">
       {/* Header */}
+      {loadError && <div role="alert" className="shrink-0 px-4 py-2 text-sm text-amber-600">{loadError} <button className="underline" onClick={() => void loadData()}>Retry</button></div>}
       <header className="bg-[var(--bg-surface)] border-b border-[var(--border)] px-4 py-3 flex flex-wrap gap-3 items-center justify-between shrink-0">
         <div className="min-w-0 flex items-center gap-3">
           <Image

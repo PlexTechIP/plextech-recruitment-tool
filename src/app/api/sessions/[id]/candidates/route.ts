@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
 import { connectDB } from '@/lib/mongodb'
 import { Applicant, Candidate, RecruitmentCycle, Round, Session, SessionBan, SessionMember } from '@/lib/models'
@@ -33,12 +33,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Join this session to view candidates.' }, { status: 403 })
   }
   if (session.round_id && session.status === 'active') {
+    // Return the saved snapshot first; Sheets must never block candidate reads.
+    // syncBehavioral retains its shared database lease and 30-second throttle.
+    after(async () => { try {
     const round = await Round.findById(session.round_id).select('cycle_id').lean()
     const cycle = round ? await RecruitmentCycle.findById(round.cycle_id).schemaLevelProjections(false).select('behavioral_source').lean() : null
     const source = cycle?.behavioral_source as BehavioralSource | null
     if (cycle && source?.rounds?.some(r => r.id === session.round_id?.toString())) {
       await syncBehavioral(cycle._id.toString()).catch(() => undefined)
     }
+    } catch { /* Keep the last successful snapshot during upstream outages. */ } })
   }
   const candidates = await Candidate.find({ session_id: id }).sort({ created_at: 1 }).lean()
   const applicantIds = candidates
