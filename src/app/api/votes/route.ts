@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
       if (!candidate) throw new VoteMutationRejected('Candidate not found.', 404)
 
       const session = await SessionModel.findById(candidate.session_id)
-        .select('status')
+        .select('status one_vouch_per_member')
         .session(dbSession)
         .lean()
       if (!session) throw new VoteMutationRejected('Session not found.', 404)
@@ -109,6 +109,12 @@ export async function POST(req: NextRequest) {
       }
       if (await SessionBan.exists({ session_id: candidate.session_id, email: auth.email }).session(dbSession)) {
         throw new VoteMutationRejected('You have been removed from this session.', 403)
+      }
+
+      if (body.vote_type === 'vouch' && session.one_vouch_per_member) {
+        const candidates = await Candidate.find({ session_id: candidate.session_id }).select('_id').session(dbSession).lean()
+        const existing = await Vote.exists({ candidate_id: mongoose.trusted({ $in: candidates.map(c => c._id) }), voter_email: auth.email, vote_type: 'vouch' }).session(dbSession)
+        if (existing) throw new VoteMutationRejected('This session allows one vouch per member. Remove your current vouch before choosing another applicant.', 409)
       }
 
       const [vote] = await Vote.create([{

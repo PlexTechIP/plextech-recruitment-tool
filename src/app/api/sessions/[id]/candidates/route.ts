@@ -45,7 +45,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     .map(candidate => candidate.applicant_id)
     .filter((applicantId): applicantId is mongoose.Types.ObjectId => applicantId instanceof mongoose.Types.ObjectId)
   const applicants = applicantIds.length > 0
-    ? await Applicant.find({ _id: mongoose.trusted({ $in: applicantIds }) }).select('_id gender').lean()
+    ? await Applicant.find({ _id: mongoose.trusted({ $in: applicantIds }) }).select('_id gender year').lean()
     : []
   const genderByApplicantId = new Map(
     applicants.map(applicant => [applicant._id.toString(), applicant.gender ?? null]),
@@ -57,6 +57,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     applicant_id: c.applicant_id?.toString() ?? null,
     data: {
       ...(isPlainRecord(c.data) ? c.data : {}),
+      'Class year': c.applicant_id
+        ? applicants.find(a => a._id.toString() === c.applicant_id?.toString())?.year ?? 'Not provided'
+        : (isPlainRecord(c.data) ? c.data['Class year'] : null) ?? 'Not provided',
       gender: c.applicant_id
         ? genderByApplicantId.get(c.applicant_id.toString()) ?? null
         : isPlainRecord(c.data) ? c.data.gender ?? null : null,

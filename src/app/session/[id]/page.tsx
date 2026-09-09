@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, use } from 'react'
+import { useEffect, useState, useCallback, useRef, use } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
@@ -144,6 +144,9 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [votes, setVotes] = useState<Vote[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const seenFocus = useRef({ session: '', version: -1 })
+  const [controlBusy, setControlBusy] = useState(false)
+  const [controlError, setControlError] = useState('')
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const [memberCount, setMemberCount] = useState(0)
@@ -213,6 +216,16 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     }
 
     if (sessionData) setSession(sessionData)
+    if (sessionData && (seenFocus.current.session !== sessionId || (sessionData.focus_version ?? 0) > seenFocus.current.version)) {
+      seenFocus.current = { session: sessionId, version: sessionData.focus_version ?? 0 }
+      if (sessionData.focused_candidate_id && cands.some(c => c.id === sessionData.focused_candidate_id)) {
+        setSelectedId(sessionData.focused_candidate_id)
+        setViewMode('candidate')
+        setFilterStatus('all')
+        setSearch('')
+        setBulkMode(false)
+      }
+    }
     setCandidates(cands)
     setMemberCount(Array.isArray(membersData) ? membersData.length : 0)
 
@@ -276,6 +289,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   }, [authStatus, sessionId, router, loadData])
 
   const selected = candidates.find(candidate => candidate.id === selectedId) ?? null
+  const focused = candidates.find(candidate => candidate.id === session?.focused_candidate_id)
+
+  async function updateControl(body: Record<string, unknown>) {
+    setControlBusy(true); setControlError('')
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/controls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Unable to update controls.')
+      await loadData()
+    } catch (e) { setControlError(e instanceof Error ? e.message : 'Unable to update controls.') }
+    finally { setControlBusy(false) }
+  }
 
   // Match by email when the vote has one (server dedupes by email); fall back
   // to display name for votes cast before email tracking existed.
@@ -297,6 +322,10 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         alert(`Could not remove vote: ${err?.error ?? res.statusText}`)
       }
     } else {
+      if (voteType === 'vouch' && session?.one_vouch_per_member && votes.some(v => v.vote_type === 'vouch' && isMyVote(v))) {
+        alert('One vouch per member is enabled. Remove your current vouch before choosing another applicant.')
+        return
+      }
       // Remove the opposite vote first (can't vouch and anti-vouch simultaneously)
       const opposite = voteType === 'vouch' ? 'anti_vouch' : voteType === 'anti_vouch' ? 'vouch' : null
       if (opposite) {
@@ -539,6 +568,18 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       </header>
 
       <BehavioralSyncPanel sessionId={sessionId} admin={authSession?.user?.role === 'admin'} />
+      <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2 text-sm space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <span>{session.one_vouch_per_member ? 'One vouch per member · remove it to choose someone else' : 'Vouches: no session-wide limit'}</span>
+          {focused && <button className="text-[#FF6B35] underline" onClick={() => { setSelectedId(focused.id); setViewMode('candidate'); setFilterStatus('all'); setSearch('') }}>Currently discussing: {focused.name} — return to focus</button>}
+          {authSession?.user?.role === 'admin' && session.status === 'active' && <>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={!!session.one_vouch_per_member} disabled={controlBusy} onChange={e => void updateControl({ action: 'vouch-limit', enabled: e.target.checked })} />Limit to 1 vouch per member</label>
+            <button className="rounded border px-3 py-1 disabled:opacity-40" disabled={controlBusy || !selectedId} onClick={() => void updateControl({ action: 'focus', candidate_id: selectedId })}>Focus selected applicant for everyone</button>
+            {focused && <button className="rounded border px-3 py-1" disabled={controlBusy} onClick={() => void updateControl({ action: 'focus', candidate_id: null })}>Clear focus</button>}
+          </>}
+        </div>
+        {controlError && <p role="alert" className="text-red-600">{controlError}</p>}
+      </div>
       {isAdmin && bulkMode && (
         <div className="shrink-0 flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-surface)] px-4 py-2">
           <span className="mr-1 text-sm font-medium text-[var(--text-primary)]">
