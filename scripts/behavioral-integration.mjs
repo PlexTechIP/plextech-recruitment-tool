@@ -1,0 +1,79 @@
+// Isolated Mongo transaction checks. Never writes to the configured app database.
+import assert from 'node:assert/strict'
+import Module, { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import ts from 'typescript'
+import mongoose from 'mongoose'
+import { spawn } from 'node:child_process'
+const require = createRequire(import.meta.url)
+const resolve = Module._resolveFilename
+Module._resolveFilename = function (id, ...args) { return resolve.call(this, id.startsWith('@/') ? path.resolve('src', id.slice(2)) : id, ...args) }
+require.extensions['.ts'] = (m, f) => m._compile(ts.transpileModule(readFileSync(f, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, f)
+if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI required; a separate disposable database is always used.')
+const dbName = `plextech_behavioral_test_${Date.now()}`
+await mongoose.connect(process.env.MONGODB_URI, { dbName, secureProtocol: 'TLSv1_2_method' })
+let dev
+try {
+  const models = require('../src/lib/models/index.ts')
+  await Promise.all(Object.values(models).filter(m => typeof m.init === 'function').map(m => m.init()))
+  const { RecruitmentCycle: Cycle, Round, Session, Candidate, Applicant } = models
+  const { BEHAVIORAL_HEADERS: headers, BEHAVIORAL_CRITERIA: criteria } = require('../src/lib/behavioralImport.ts')
+  const row = (name, score = 4) => { const r = Array(30).fill(''); r[0] = '9/8/2026 15:00:00'; r[1] = 'reader@example.com'; r[3] = 'Reader'; r[4] = name; r[7] = 'Preserved notes'; for (const [i] of criteria) r[i] = score; r[28] = 6; return r }
+  let rows = [row('Ada Lovelace'), row('Grace Hopper')], fetches = 0, fail = false
+  require('../src/lib/coffeeChats.ts').fetchGoogleSheetCsv = async () => { fetches++; if (fail) throw new Error('Fixture outage'); return [headers, ...rows].map(r => r.map(x => JSON.stringify(String(x))).join(',')).join('\n') }
+  const { behavioralRoster, syncBehavioral } = require('../src/lib/behavioralSync.ts')
+  const cycle = await Cycle.create({ name: 'Isolated behavioral test' })
+  const finals = []
+  for (const [role, name] of [['curriculum', 'Ada Lovelace'], ['developer', 'Grace Hopper']]) {
+    const applicant = await Applicant.create({ cycle_id: cycle._id, first_name: name.split(' ')[0], last_name: name.split(' ')[1], email: `${role}@example.com` })
+    const prior = await Round.create({ cycle_id: cycle._id, name: `${role} prior`, order_index: 2, role, grading_type: 'interview' })
+    const sess = await Session.create({ _id: role === 'curriculum' ? 'TESTCU' : 'TESTDE', round_id: prior._id, name: role, role, status: 'ended', created_by: 'admin@example.com' })
+    await Candidate.create({ session_id: sess._id, applicant_id: applicant._id, name, status: 'accepted' })
+    finals.push(await Round.create({ cycle_id: cycle._id, name: `${role} final`, order_index: 3, role, grading_type: 'interview' }))
+  }
+  const targets = await behavioralRoster(cycle.id, finals.map(r => r.id))
+  assert.equal(targets.roster.length, 2)
+  const configuration = { ...targets, sheetId: 'fixture', gid: '0', resolutions: {}, created_by: 'admin@example.com' }
+  const first = await syncBehavioral(cycle.id, { force: true, configuration })
+  assert.equal(first.applicants, 2)
+  const ids = first.sessions.map(s => s.id)
+  const before = await Candidate.find({ session_id: mongoose.trusted({ $in: ids }) }).lean()
+  assert.equal(before.length, 2); assert.equal(before[0].data.interview.records.length, 1)
+  await Candidate.updateOne({ _id: before[0]._id }, { $set: { status: 'accepted', 'data.manual': 'Keep me' } })
+  const count = fetches
+  const throttled = await Promise.all([syncBehavioral(cycle.id), syncBehavioral(cycle.id)])
+  assert.ok(throttled.every(r => r.busy)); assert.equal(fetches, count)
+  rows = [row('Ada Lovelace', 2)]
+  await syncBehavioral(cycle.id, { force: true })
+  const after = await Candidate.find({ session_id: mongoose.trusted({ $in: ids }) }).lean()
+  assert.deepEqual(after.map(c => String(c._id)).sort(), before.map(c => String(c._id)).sort())
+  assert.equal(after.find(c => String(c._id) === String(before[0]._id)).status, 'accepted')
+  assert.equal(after.find(c => String(c._id) === String(before[0]._id)).data.manual, 'Keep me')
+  assert.equal(after.find(c => c.name === 'Grace Hopper').data.score, null)
+  const savedScore = after.find(c => c.name === 'Ada Lovelace').data.score
+  rows.push(row('Unknown Person'))
+  await assert.rejects(syncBehavioral(cycle.id, { force: true }), /unmatched/)
+  assert.equal((await Candidate.findOne({ name: 'Ada Lovelace', session_id: mongoose.trusted({ $in: ids }) })).data.score, savedScore)
+  fail = true
+  await assert.rejects(syncBehavioral(cycle.id, { force: true }), /outage/)
+  assert.equal((await Candidate.findOne({ name: 'Ada Lovelace', session_id: mongoose.trusted({ $in: ids }) })).data.score, savedScore)
+  console.log('Isolated transaction checks passed: track lookup, initialization, shared throttle, repeated sync, removed responses, decision preservation, unmatched and outage snapshots.')
+  if (process.argv.includes('--http')) {
+    const uri = new URL(process.env.MONGODB_URI); uri.pathname = `/${dbName}`
+    dev = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'dev', '--webpack', '--port', '5192'], { env: { ...process.env, MONGODB_URI: uri.href, TEST_BYPASS_AUTH: '1' }, stdio: ['ignore', 'ignore', 'ignore'] })
+    for (let i = 0; i < 60; i++) { try { await fetch('http://localhost:5192/'); break } catch { await new Promise(r => setTimeout(r, 500)) } }
+    const endpoint = `http://localhost:5192/api/behavioral-sync?session_id=${ids[0]}`
+    const headersFor = (role, email = 'admin@example.com') => ({ 'x-test-role': role, 'x-test-email': email, 'Content-Type': 'application/json' })
+    assert.equal((await fetch(endpoint)).status, 401)
+    assert.equal((await fetch(endpoint, { headers: headersFor('grader', 'outsider@example.com') })).status, 403)
+    assert.equal((await fetch(endpoint, { headers: headersFor('admin') })).status, 200)
+    assert.equal((await fetch('http://localhost:5192/api/behavioral-sync', { method: 'POST', headers: headersFor('grader'), body: JSON.stringify({ action: 'sync', cycle_id: cycle.id }) })).status, 403)
+    console.log('Local HTTP authentication checks passed: anonymous, outsider and non-admin rejected; joined admin allowed.')
+  }
+} finally {
+  dev?.kill('SIGTERM')
+  if (mongoose.connection.name !== dbName || !dbName.startsWith('plextech_behavioral_test_')) throw new Error('Refusing cleanup outside test database.')
+  await mongoose.connection.dropDatabase()
+  await mongoose.disconnect()
+}

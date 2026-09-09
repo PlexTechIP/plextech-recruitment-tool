@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
 
   if (round) {
     const cycle = await RecruitmentCycle.findById(round.cycle_id)
-      .select('+coffee_chat_sheet_id +coffee_chat_sheet_gid')
+      .schemaLevelProjections(false).select('coffee_chat_sheet_id coffee_chat_sheet_gid')
       .lean()
     if (cycle?.coffee_chat_sheet_id) {
       try {

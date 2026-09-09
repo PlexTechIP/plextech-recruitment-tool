@@ -49,6 +49,7 @@ async function getEligibleApplicants(round: { _id: mongoose.Types.ObjectId; cycl
   const priorRound = await Round.findOne({
     cycle_id: round.cycle_id,
     order_index: mongoose.trusted({ $lt: round.order_index }),
+    role: mongoose.trusted({ $in: [round.role, null] }),
   }).sort({ order_index: -1 }).select('_id').lean()
   if (!priorRound) throw new InterviewImportRejected('No prior recruitment round was found.', 409)
 

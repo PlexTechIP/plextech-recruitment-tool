@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
   await connectDB()
   const cycle = await RecruitmentCycle.findById(cycleId)
-    .select('+coffee_chat_sheet_id +coffee_chat_sheet_gid')
+    .schemaLevelProjections(false).select('coffee_chat_sheet_id coffee_chat_sheet_gid')
     .lean()
   if (!cycle) return NextResponse.json({ error: 'Recruitment cycle not found.' }, { status: 404 })
   const connected = Boolean(cycle.coffee_chat_sheet_id)
